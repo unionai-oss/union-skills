@@ -1,0 +1,15 @@
+{
+  "name": "union-skills",
+  "owner": {
+    "name": "unionai-oss",
+    "url": "https://github.com/unionai-oss/union-skills"
+  },
+  "description": "Agent skills and MCP servers for deploying and operating Union.ai.",
+  "plugins": [
+    {
+      "name": "union",
+      "source": "./plugins/union",
+      "description": "Deploy and operate Union.ai. Self-serve setup on AWS end to end: provision EKS, S3, ECR and IAM, connect your cluster, run tracked workflows locally, and debug data-plane health."
+    }
+  ]
+}
