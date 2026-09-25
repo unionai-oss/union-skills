@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -282,8 +283,27 @@ def redact_source() -> str:
     return m.group(0)
 
 
+# Exactly the utilities collect.sh calls. The PATH is built from these alone so
+# that kubectl/aws/helm are genuinely absent -- a GitHub runner ships kubectl in
+# /usr/bin, so "PATH=stub:/usr/bin" would not have tested what it claimed to.
+COLLECT_NEEDS = (
+    "sed",
+    "grep",
+    "awk",
+    "date",
+    "seq",
+    "wc",
+    "tr",
+    "head",
+    "cut",
+    "sort",
+    "cat",
+    "tee",
+)
+
+
 def run_collect(tmp_path: Path, env_extra: dict[str, str] | None = None):
-    """Run collect.sh with no kubectl and no aws on PATH.
+    """Run collect.sh with a PATH holding only coreutils — no kubectl, no aws.
 
     Degrading cleanly is the property that matters: the script runs on whatever
     laptop the user happens to have, and a stack trace instead of a report is
@@ -291,14 +311,22 @@ def run_collect(tmp_path: Path, env_extra: dict[str, str] | None = None):
     """
     stub = tmp_path / "bin"
     stub.mkdir()
+    for tool in COLLECT_NEEDS:
+        found = shutil.which(tool)
+        if found:
+            (stub / tool).symlink_to(found)
+    assert not (stub / "kubectl").exists()
+
     env = {
-        "PATH": f"{stub}:/usr/bin:/bin",
+        "PATH": str(stub),
         "HOME": str(tmp_path),
         "UNION_ENV_FILE": str(tmp_path / "absent.env"),
         **(env_extra or {}),
     }
+    bash = shutil.which("bash")
+    assert bash, "bash is required to run the snapshot script"
     return subprocess.run(
-        ["bash", str(COLLECT)], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60
+        [bash, str(COLLECT)], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60
     )
 
 

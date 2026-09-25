@@ -23,6 +23,7 @@ Requires: node/npm, and either `uv` or `python -m build`.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
@@ -33,9 +34,15 @@ import zipfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "packaging"))
 
-import build as builder  # noqa: E402
+# Load build.py by path rather than `import build`: `build` is also a PyPI
+# package, and it is installed here (this file uses it to build wheels), so a
+# plain import would resolve by sys.path order.
+_spec = importlib.util.spec_from_file_location(
+    "union_skills_packaging_build", REPO / "packaging" / "build.py"
+)
+builder = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(builder)
 
 FAILURES: list[str] = []
 

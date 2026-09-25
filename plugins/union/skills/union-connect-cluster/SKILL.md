@@ -28,6 +28,19 @@ Half of it is a web form and half of it is a shell, so values cross between them
 Say which side of that the user is on at each point. The commonest way this step goes wrong
 is the human not realising a turn is theirs and waiting on an agent that is waiting on them.
 
+## What the agent needs from you
+
+| Input | When | Notes |
+|---|---|---|
+| **The six values** | §1–§2 | From `union-provision-aws` step 8, or gathered for existing resources. Listed below. |
+| **A name for the cluster in Union.ai** | §2 | **Permanent.** The agent must ask, not choose. Matching the EKS cluster name keeps the two from drifting. |
+| **Clicking through two UI forms** | §1–§2 | There is no CLI for either. |
+| **Copying the install command out of the UI** | §3 | Carries a private key — see [The credential](#the-credential) for how to move it without putting it in the transcript. |
+| **Confirmation at the install gate** | §3 | The one ⛔ APPROVAL GATE in this skill. |
+
+Everything after §3 is automatic: Union.ai installs the data plane through the agent's
+outbound connection, and nobody has to do anything but wait.
+
 ---
 
 ## What you need

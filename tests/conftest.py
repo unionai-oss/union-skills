@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -12,7 +13,25 @@ REPO = Path(__file__).resolve().parent.parent
 PLUGIN = REPO / "plugins" / "union"
 SKILLS = PLUGIN / "skills"
 
-sys.path.insert(0, str(REPO / "packaging"))
+
+def _load_builder():
+    """Load packaging/build.py under an unambiguous name.
+
+    `import build` would be ambiguous: `build` is also a PyPI package, and it is
+    installed wherever this repo's own tooling runs. Which one wins then depends
+    on sys.path order -- and isort classifies the name differently depending on
+    whether the PyPI package happens to be installed, so even the linter's
+    verdict changes between machines. Loading by path removes both problems.
+    """
+    path = REPO / "packaging" / "build.py"
+    spec = importlib.util.spec_from_file_location("union_skills_packaging_build", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+builder = _load_builder()
 
 
 def skill_dirs() -> list[Path]:

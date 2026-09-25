@@ -14,9 +14,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from conftest import REPO, skill_names
-
-import build as builder
+from conftest import REPO, builder, skill_names
 
 
 def test_version_is_semver_and_consistent():

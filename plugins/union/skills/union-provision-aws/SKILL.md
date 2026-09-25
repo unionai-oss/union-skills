@@ -33,6 +33,24 @@ if they meet the requirements — read **[references/existing-resources.md](refe
 check them against it, then collect the [step 8](#step-8--collect-the-values) values and go
 to `union-connect-cluster`.
 
+## What the agent needs from you
+
+Ask for all of these **before** running anything, and read them back. They are cheap to
+change now and expensive to change after step 2.
+
+| Input | Why it matters | Changeable later? |
+|---|---|---|
+| **Which AWS account** | May not be the Marketplace billing account. Everything lands here. | No — you would rebuild. |
+| **`AWS_REGION`** | Where the cluster and its Secrets Manager secrets live. Put it near the **Union region** chosen at sign-up. | No. |
+| **`NAME_PREFIX`** | Every resource name derives from it. | No. |
+| **Bucket name** | Derived from the prefix, but **globally unique across all of AWS**. A collision fails step 3 and is not retryable without a new name. | No. |
+| **Kubernetes version** | Must be one EKS offers in this region today. [Step 1](#step-1--names-and-identity) checks. | Yes — cluster upgrade. |
+| **Confirmation at each ⛔ APPROVAL GATE** | Six of the eight steps create billable resources. | — |
+
+You do **not** need a Secrets Manager secret, a fast-registration bucket, a node group, or
+an autoscaler. Those either come later or do not apply — see
+[Behaviour worth remembering](#behaviour-worth-remembering).
+
 ---
 
 ## Operating rules for this skill
