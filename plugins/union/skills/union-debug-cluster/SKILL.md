@@ -5,11 +5,11 @@ description: 'Diagnose a Union.ai self-serve cluster that is unhealthy, stuck in
 
 # Debugging a Union.ai self-serve cluster
 
-Every check in this skill is 🟢 **READ-ONLY** unless it is explicitly marked as an ⛔ APPROVAL GATE. Diagnose
-completely before changing anything: most of these failures look alike from the UI, and the
-most expensive mistake is reinstalling the agent when the actual problem is an IAM trust
-policy — the reinstall then produces a *new* `instance-<id>` namespace and a new set of
-symptoms on top of the old one.
+Every check here is 🟢 **READ-ONLY** unless explicitly marked as an ⛔ APPROVAL GATE.
+Diagnose completely before changing anything: most of these failures look alike from the
+UI, and the most expensive mistake is reinstalling the agent when the real problem is an
+IAM trust policy — the reinstall then produces a *new* `instance-<id>` namespace and a
+fresh set of symptoms layered on the old ones.
 
 ---
 
@@ -34,6 +34,15 @@ Installation progress panel say now?* Then run the snapshot.
 
 ```bash
 bash scripts/collect.sh -o /tmp/union-health.txt
+```
+
+`scripts/collect.sh` is relative to this skill's own directory. If that path does not
+resolve, find it rather than giving up — where it lands depends on the harness:
+
+```bash
+find ~/.claude/skills ~/.agents/skills ~/.hermes/skills ~/.config/opencode/skills \
+     ~/.pi/agent/skills ./.claude/skills ./.agents/skills \
+     -name collect.sh -path '*union-debug-cluster*' 2>/dev/null | head -1
 ```
 
 **If it reports the API server unreachable, read the message before assuming the cluster is
