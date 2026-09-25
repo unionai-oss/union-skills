@@ -45,7 +45,7 @@ change now and expensive to change after step 2.
 | **`NAME_PREFIX`** | Every resource name derives from it. | No. |
 | **Bucket name** | Derived from the prefix, but **globally unique across all of AWS**. A collision fails step 3 and is not retryable without a new name. | No. |
 | **Kubernetes version** | Must be one EKS offers in this region today. [Step 1](#step-1--names-and-identity) checks. | Yes — cluster upgrade. |
-| **Confirmation at each ⛔ APPROVAL GATE** | Six of the eight steps create billable resources. | — |
+| **Confirmation at each ⛔ APPROVAL GATE** | Ten of them, across eight steps. Steps 2, 3 and 4 are the ones that start charges; the rest create IAM objects, which are free. | — |
 
 You do **not** need a Secrets Manager secret, a fast-registration bucket, a node group, or
 an autoscaler. Those either come later or do not apply — see
