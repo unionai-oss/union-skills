@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 import yaml
@@ -208,6 +209,19 @@ def test_rejects_a_tag_that_already_exists(tmp_path):
 
 WORKFLOWS = REPO / ".github" / "workflows"
 
+# Workflows a human or an event triggers directly. These own every elevated
+# permission, and each one is a PyPI trusted-publisher identity.
+ENTRY_WORKFLOWS = ["release.yml", "tag-push.yml"]
+# Workflows only ever reached through `uses:`.
+CALLED_WORKFLOWS = ["ci.yml", "packaging.yml", "build-dists.yml"]
+
+# GitHub's permission ladder. A called workflow's nested job may request at most
+# what the calling job grants, and this is checked when the workflow is PARSED --
+# an `if:` that would skip the job at runtime does not exempt it. A violation is
+# not a failed job, it is "Invalid workflow file", discovered only when someone
+# tries to run the thing.
+RANK = {None: 0, "none": 0, "read": 1, "write": 2}
+
 
 def load_workflow(name: str) -> dict:
     data = yaml.safe_load((WORKFLOWS / name).read_text())
@@ -216,24 +230,23 @@ def load_workflow(name: str) -> dict:
     return data
 
 
-@pytest.mark.parametrize("name", ["ci.yml", "packaging.yml", "publish.yml", "release.yml"])
+@pytest.mark.parametrize("name", ENTRY_WORKFLOWS + CALLED_WORKFLOWS)
 def test_workflow_is_valid_yaml_with_jobs(name):
-    wf = load_workflow(name)
-    assert wf.get("jobs"), f"{name} declares no jobs"
+    assert load_workflow(name).get("jobs"), f"{name} declares no jobs"
 
 
-@pytest.mark.parametrize("name", ["ci.yml", "packaging.yml", "publish.yml"])
+@pytest.mark.parametrize("name", CALLED_WORKFLOWS)
 def test_called_workflows_declare_workflow_call(name):
-    """release.yml reuses these. Without `workflow_call` the release cannot run
-    the same checks a PR does, and the `uses:` reference fails at dispatch time —
-    which is only discoverable after merging to the default branch."""
+    """Without `workflow_call` the `uses:` reference is invalid — and that is only
+    discoverable after merging to the default branch, where dispatch appears."""
     assert "workflow_call" in load_workflow(name)["triggers"], (
-        f"{name} is reused by release.yml but does not declare workflow_call"
+        f"{name} is reused by an entry workflow but does not declare workflow_call"
     )
 
 
-def test_release_only_references_workflows_that_exist():
-    for job, spec in load_workflow("release.yml")["jobs"].items():
+@pytest.mark.parametrize("entry", ENTRY_WORKFLOWS)
+def test_entry_workflows_only_reference_workflows_that_exist(entry):
+    for job, spec in load_workflow(entry)["jobs"].items():
         ref = spec.get("uses")
         if not ref:
             continue
@@ -241,45 +254,126 @@ def test_release_only_references_workflows_that_exist():
         assert (REPO / ref[2:]).is_file(), f"{job} calls {ref}, which does not exist"
 
 
-def test_release_grants_id_token_to_the_publish_call():
-    """A reusable workflow can never hold more permission than its caller.
+@pytest.mark.parametrize("name", CALLED_WORKFLOWS)
+def test_called_workflows_request_no_elevated_permission(name):
+    """The invariant that keeps every call site simple.
 
-    publish.yml declares `id-token: write` for PyPI's OIDC exchange, but that is
-    capped by the calling job's grant — so omitting it here does not fail loudly,
-    it fails at the upload with an auth error after the tag is already pushed.
+    This is the bug GitHub rejected once already: `contents: write` on a job in a
+    called workflow made the whole call an invalid workflow file, even though an
+    `if:` would have skipped that job. Keeping called workflows at `contents:
+    read` means no caller has to grant anything, so no caller can get it wrong.
     """
-    publish = load_workflow("release.yml")["jobs"]["publish"]
-    assert publish.get("permissions", {}).get("id-token") == "write", (
-        "release.yml's publish job must grant id-token: write, or trusted "
-        "publishing fails after the tag has been pushed"
+    wf = load_workflow(name)
+    for job, spec in wf["jobs"].items():
+        for scope, level in (spec.get("permissions") or {}).items():
+            assert RANK[level] <= RANK["read"], (
+                f"{name} job '{job}' requests {scope}: {level}. Callers grant "
+                "called workflows nothing, so anything above `read` makes every "
+                "call an invalid workflow file. Move that job to an entry workflow."
+            )
+
+
+def test_called_workflows_fit_within_every_callers_grant():
+    """The general form of the rule above, checked against the actual call sites."""
+    for entry in ENTRY_WORKFLOWS:
+        for job, spec in load_workflow(entry)["jobs"].items():
+            ref = spec.get("uses")
+            if not ref:
+                continue
+            granted = spec.get("permissions") or {}
+            for nested, nspec in load_workflow(Path(ref).name)["jobs"].items():
+                for scope, level in (nspec.get("permissions") or {}).items():
+                    assert RANK[level] <= RANK.get(granted.get(scope)), (
+                        f"{entry} job '{job}' grants {scope}: "
+                        f"{granted.get(scope) or 'none'}, but {ref}'s nested job "
+                        f"'{nested}' requests {scope}: {level}. GitHub rejects this "
+                        f"at parse time, regardless of any `if:` on '{nested}'."
+                    )
+
+
+@pytest.mark.parametrize("entry", ENTRY_WORKFLOWS)
+def test_the_pypi_upload_runs_in_the_entry_workflow(entry):
+    """PyPI trusted publishing names a workflow that is *triggered*.
+
+    It matches the OIDC `workflow_ref` claim, and it cannot name a reusable
+    workflow at all (pypi/warehouse#11096). An upload that happened inside
+    build-dists.yml would make the publisher config ambiguous at best, so the
+    upload step has to live here — and needs `id-token: write` to do it.
+    """
+    jobs = load_workflow(entry)["jobs"]
+    uploaders = [
+        (name, spec)
+        for name, spec in jobs.items()
+        if any(
+            "gh-action-pypi-publish" in str(step.get("uses", ""))
+            for step in (spec.get("steps") or [])
+        )
+    ]
+    assert uploaders, f"{entry} never uploads to PyPI"
+    for name, spec in uploaders:
+        assert (spec.get("permissions") or {}).get("id-token") == "write", (
+            f"{entry} job '{name}' uploads to PyPI but does not request "
+            "id-token: write, so the OIDC exchange fails"
+        )
+        assert spec.get("environment") == "pypi", (
+            f"{entry} job '{name}' must run in the `pypi` environment — the "
+            "trusted publisher is configured against it"
+        )
+
+
+def test_build_dists_is_never_an_entry_workflow():
+    """It has no upload step, so it must not look like a release path."""
+    triggers = load_workflow("build-dists.yml")["triggers"]
+    assert "push" not in triggers, (
+        "build-dists.yml must not trigger on a tag push; tag-push.yml owns that, "
+        "because the PyPI upload has to run in the triggered workflow"
     )
 
 
-def test_nothing_is_written_before_the_checks_pass():
+@pytest.mark.parametrize("entry", ENTRY_WORKFLOWS)
+def test_every_entry_workflow_builds_and_attaches(entry):
+    """Both release paths must build from the shared workflow and end with
+    artifacts on the GitHub release."""
+    jobs = load_workflow(entry)["jobs"]
+    assert any("build-dists.yml" in str(s.get("uses", "")) for s in jobs.values()), (
+        f"{entry} never calls build-dists.yml, so it would build differently "
+        "from the other release path"
+    )
+    assert any(
+        "gh release" in str(step.get("run", ""))
+        for s in jobs.values()
+        for step in (s.get("steps") or [])
+    ), f"{entry} never creates or uploads to a GitHub release"
+
+
+def test_release_writes_nothing_before_the_checks_pass():
     """The ordering that makes a dry run meaningful.
 
-    Every job that writes (pushes, tags, publishes, uploads) must depend on both
-    check workflows, directly or through another job that does.
+    Every job that writes — pushes, tags, publishes, uploads — must depend on
+    both check workflows, directly or through another job that does.
     """
     jobs = load_workflow("release.yml")["jobs"]
 
     def deps(job: str, seen=None) -> set:
-        seen = seen or set()
+        seen = seen if seen is not None else set()
         for d in jobs[job].get("needs", []) or []:
             if d not in seen:
                 seen.add(d)
                 deps(d, seen)
         return seen
 
-    for writer in ("tag", "publish", "attach"):
+    for writer in ("tag", "build", "pypi", "attach"):
         assert {"ci", "packaging"} <= deps(writer), (
             f"{writer} writes but does not transitively depend on ci and packaging"
         )
 
 
-def test_publish_is_skipped_on_a_dry_run():
+def test_release_publishes_nothing_on_a_dry_run():
     jobs = load_workflow("release.yml")["jobs"]
-    for job in ("publish", "attach"):
+    for job in ("build", "attach"):
         assert "released == 'true'" in str(jobs[job].get("if", "")), (
             f"{job} must be gated on the tag job having actually pushed"
         )
+    # `pypi` inherits the gate through `needs: [build]`; a skipped dependency
+    # skips it too. Assert the chain rather than a duplicated condition.
+    assert jobs["pypi"]["needs"] == ["build"]

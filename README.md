@@ -149,7 +149,7 @@ packaging/                generates the PyPI and npm trees from it
   templates/cli.py        the Python installer CLI  } two implementations of one
   templates/cli.mjs       the Node installer CLI     } contract; verify.py diffs them
 tests/                    content lint, CLI behaviour, build fan-out
-.github/workflows/        ci (lint, shellcheck, pytest), packaging, publish, release
+.github/workflows/        ci, packaging, build-dists (shared), release, tag-push
 ```
 
 Releases are cut from the Actions tab — **`release` → Run workflow** with a `vX.Y.Z`

@@ -25,7 +25,9 @@ The order is deliberate — every check runs *before* anything is written:
 2. **ci** and **packaging** — the same checks a PR gets, via the same workflow files.
 3. **tag** — the first job that writes. Bumps, stamps, re-runs `verify.py` with the release
    version in place, commits, tags, pushes, creates the release.
-4. **publish** — builds at the tag, re-runs the checks there, uploads to PyPI.
+4. **build** → **pypi** → **attach** — builds at the tag via `build-dists.yml`, re-runs
+   every check there, uploads to PyPI, and attaches the wheel, sdist and npm tarball to the
+   release.
 
 `dry_run` stops after step 3's local commit, before any push, and tells you in the run
 summary exactly what it would have done. Rehearsing costs a few runner minutes and nothing
@@ -72,8 +74,10 @@ forward and needs nothing special.
   re-release cannot replace what is already published — bump to the next patch.
 - **PyPI rejects the version as already used.** Same cause, caught later. Bump and re-run.
 - **A job failed after the tag was pushed.** The tag and GitHub release exist but PyPI does
-  not have the version. Fix the cause and re-run the `publish` workflow manually against
-  that tag, rather than re-running `release` — the tag is already correct.
+  not have the version. The tag is already correct, so do not re-run `release`. Re-run the
+  failed `tag-push` run for that tag instead, or re-push the tag to trigger a fresh one
+  (`git push origin :refs/tags/v0.0.2 && git push origin v0.0.2` — safe, since the tag
+  points at the same commit).
 
 ## The manual path
 
@@ -92,10 +96,12 @@ git tag v0.0.2
 git push origin v0.0.2
 ```
 
-The tag push triggers `publish.yml`, which refuses to continue unless the tag matches the
-manifest version, then publishes and attaches the artifacts to a generated GitHub release.
+The tag push triggers `tag-push.yml`, which builds via `build-dists.yml` — refusing to
+continue unless the tag matches the manifest version — then uploads to PyPI and attaches the
+artifacts to a GitHub release whose notes are generated from commits.
 
-To rehearse without publishing, run `publish` manually with `dry_run: true` (the default).
+To rehearse a build without publishing anything, dispatch `build-dists` directly. It has no
+upload step, so it cannot publish by construction.
 
 ## First-time setup
 
@@ -105,23 +111,30 @@ uses the workflow's OIDC identity.
 1. **GitHub environment.** Settings → Environments → New environment → `pypi`. Add required
    reviewers if you want a human gate on every publish.
 
-2. **PyPI trusted publisher.** As `unionai-oss`, at
-   <https://pypi.org/manage/account/publishing/>, add a *pending* publisher — pending,
-   because the project does not exist until the first release:
+2. **PyPI trusted publishers — two of them.** As `unionai-oss`, at
+   <https://pypi.org/manage/account/publishing/>, add a *pending* publisher for each
+   release path. Pending, because the project does not exist until the first release; each
+   becomes a normal publisher after the first successful publish.
 
-   | Field | Value |
-   |---|---|
-   | PyPI project name | `union-skills` |
-   | Owner | `unionai-oss` |
-   | Repository name | `union-skills` |
-   | Workflow name | `publish.yml` |
-   | Environment name | `pypi` |
+   | Field | Publisher 1 | Publisher 2 |
+   |---|---|---|
+   | PyPI project name | `union-skills` | `union-skills` |
+   | Owner | `unionai-oss` | `unionai-oss` |
+   | Repository name | `union-skills` | `union-skills` |
+   | Workflow name | **`release.yml`** | **`tag-push.yml`** |
+   | Environment name | `pypi` | `pypi` |
 
-   It becomes a normal publisher after the first successful publish.
+   **Why two, and why not `build-dists.yml`.** Trusted publishing matches the OIDC
+   `workflow_ref` claim, which names the workflow that was *triggered* — and PyPI cannot
+   name a reusable workflow as a publisher at all
+   ([pypi/warehouse#11096](https://github.com/pypi/warehouse/issues/11096)). So the upload
+   deliberately runs in a top-level job of whichever entry workflow was triggered, and
+   there is one publisher identity per entry workflow. `build-dists.yml` builds and
+   validates but never uploads, so it is never a publisher.
 
-   `publish.yml` is the right workflow name even when `release.yml` drives the release:
-   trusted publishing checks the workflow that performs the upload, and that is always
-   `publish.yml`, whether it was called as a job or triggered by a tag.
+   If you only ever intend to release through the Actions tab, Publisher 1 alone is
+   enough — `tag-push.yml` then builds and creates the GitHub release but its PyPI upload
+   will be rejected. Configuring both keeps the fallback path working.
 
 npm is not set up; see [packaging/README.md](packaging/README.md#enabling-npm) for what that
 would need.
