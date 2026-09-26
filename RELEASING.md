@@ -8,7 +8,7 @@ distributions. `packaging/set_version.py` writes all three; nothing else should.
 1. **Set the version.**
 
    ```bash
-   python packaging/set_version.py 0.2.0
+   python packaging/set_version.py 0.0.2
    ```
 
    Writes `plugins/union/.claude-plugin/plugin.json`,
@@ -33,8 +33,8 @@ distributions. `packaging/set_version.py` writes all three; nothing else should.
 
    ```bash
    git checkout main && git pull
-   git tag v0.2.0
-   git push origin v0.2.0
+   git tag v0.0.2
+   git push origin v0.0.2
    ```
 
    The tag must match the manifest version or the workflow fails on purpose, rather than
@@ -45,7 +45,7 @@ distributions. `packaging/set_version.py` writes all three; nothing else should.
 
 ## If something goes wrong
 
-- **Tag/manifest mismatch.** `git tag -d v0.2.0 && git push --delete origin v0.2.0`, fix the
+- **Tag/manifest mismatch.** `git tag -d v0.0.2 && git push --delete origin v0.0.2`, fix the
   manifest with `set_version.py`, land it, re-tag.
 - **PyPI rejects the version as already used.** Versions on PyPI are immutable and cannot be
   reused even after deletion. Bump to the next patch and release again.

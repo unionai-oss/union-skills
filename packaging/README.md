@@ -125,9 +125,13 @@ npm instead of (or alongside) the git source, which routes installs through a co
 ```json
 {
   "name": "union",
-  "source": { "source": "npm", "package": "union-skills", "version": "^0.1.0" }
+  "source": { "source": "npm", "package": "union-skills", "version": "^0.0.1" }
 }
 ```
+
+Note that npm's caret is near-useless below `0.1.0`: `^0.0.1` allows only `0.0.1` exactly,
+because caret treats every `0.0.x` release as potentially breaking. Until the version
+reaches `0.1.0`, either pin exactly or use `~0.0.1` and bump the range deliberately.
 
 There is no `pip` plugin source type. The PyPI package instead ships an installer CLI, and
 `union-skills emit-plugin` satisfies the `command` source contract (print one absolute path
