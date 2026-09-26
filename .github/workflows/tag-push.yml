@@ -1,0 +1,72 @@
+name: tag-push
+
+# The fallback release path: a human pushes a `v*` tag by hand.
+#
+#   git tag v0.0.2 && git push origin v0.0.2
+#
+# This is a full entry workflow rather than a trigger on the shared build, for
+# the same two reasons build-dists.yml explains: PyPI's trusted publisher must
+# name a workflow that is triggered (not a reusable one), and a called workflow's
+# nested permissions are validated when it is parsed, so elevated jobs belong in
+# the entry workflow. Publishing and release-attaching therefore live here.
+#
+# `release.yml` is the normal path and does this better: it stamps CHANGELOG.md
+# and uses that section as the release notes. Here the notes are generated from
+# commits, because a hand-pushed tag has no guarantee the changelog was stamped.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # Builds at the tag and re-runs every check there. The tag is checked against
+  # the manifest version inside build-dists.yml, so a tag that disagrees fails
+  # before anything is published.
+  build:
+    uses: ./.github/workflows/build-dists.yml
+    with:
+      tag: ${{ github.ref_name }}
+
+  # The upload runs HERE, in a top-level job of the triggered workflow, not inside
+  # build-dists.yml. PyPI trusted publishing matches the OIDC `workflow_ref`
+  # claim, which names the triggered workflow, and PyPI cannot name a reusable
+  # workflow as a publisher at all (pypi/warehouse#11096) -- so the publisher
+  # config for this repo names THIS file. See RELEASING.md.
+  pypi:
+    needs: [build]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # PyPI trusted publishing — no API token needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pypi-union-skills
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Re-running a release should be a no-op, not a hard failure.
+          skip-existing: true
+
+  attach:
+    needs: [pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets
+      - name: Create the GitHub release and attach the artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --generate-notes --title "$GITHUB_REF_NAME" release-assets/* \
+            || gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber

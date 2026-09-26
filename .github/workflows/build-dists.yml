@@ -1,0 +1,117 @@
+name: build-dists
+
+# Builds both distributions, proves they install, and uploads them as artifacts.
+# It does NOT publish anything, and that is the point.
+#
+# Publishing lives in the entry workflows (release.yml, tag-push.yml) rather than
+# here, for two independent reasons:
+#
+#   1. PyPI trusted publishing matches the OIDC `workflow_ref` claim, which names
+#      the workflow that was TRIGGERED -- not the reusable one that ran the job.
+#      PyPI also does not support naming a reusable workflow as the publisher
+#      (pypi/warehouse#11096). Keeping the upload in a top-level job means the
+#      publisher config is unambiguous whichever claim is matched.
+#   2. A job here requesting `contents: write` or `id-token: write` would force
+#      every caller to grant it. GitHub validates a called workflow's nested
+#      permissions when the file is PARSED, so such a job breaks callers that do
+#      not grant it even when an `if:` would have skipped it at runtime.
+#
+# So this workflow needs nothing beyond `contents: read`, and callers grant it
+# nothing. Dispatch it directly any time to rehearse a build; by construction it
+# cannot publish.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Tag to build from. Omit to build the current ref."
+        required: false
+        type: string
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-dists-${{ inputs.tag || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      # `inputs.tag` when called by release.yml; otherwise whatever ref fired us
+      # (the tag for a tag push, the branch for a dispatch).
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: python -m pip install --upgrade build twine pytest pyyaml
+
+      - id: version
+        name: Read the version from the plugin manifest
+        run: |
+          VERSION=$(python packaging/build.py --print-version)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "building $VERSION"
+
+      # A tag that disagrees with the manifest would publish a version nobody
+      # can trace back to a commit, so fail loudly instead.
+      - name: Tag must match the manifest version
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG:-}"
+          if [ -z "$TAG" ]; then
+            echo "No tag to check (manual dispatch); skipping."
+            exit 0
+          fi
+          VERSION="${{ steps.version.outputs.version }}"
+          if [ "${TAG#v}" != "$VERSION" ]; then
+            echo "::error::tag $TAG does not match manifest version $VERSION. Run packaging/set_version.py ${TAG#v} and re-tag."
+            exit 1
+          fi
+          echo "tag $TAG matches manifest $VERSION"
+
+      # The content lint runs here too: a release is the last place to discover
+      # that a skill links to a page that no longer exists.
+      - name: Content and packaging checks
+        run: |
+          python -m pytest
+          python packaging/verify.py
+
+      - name: Build the release artifacts
+        run: |
+          set -euo pipefail
+          python packaging/build.py --outdir build
+          mkdir -p release-assets pypi-dist
+          npm pack ./build/npm/union-skills --pack-destination release-assets
+          (cd build/pypi/union-skills && python -m build)
+          cp build/pypi/union-skills/dist/* pypi-dist/
+          cp build/pypi/union-skills/dist/* release-assets/
+          twine check pypi-dist/*
+
+      # `npm publish --dry-run` runs the same validation as a real publish
+      # (name, version, file list) without pushing anything to the registry.
+      - name: npm publish --dry-run
+        run: npm publish ./build/npm/union-skills --dry-run --access public
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-union-skills
+          path: build/npm/union-skills
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pypi-union-skills
+          path: pypi-dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets

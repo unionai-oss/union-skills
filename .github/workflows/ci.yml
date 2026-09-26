@@ -47,6 +47,25 @@ jobs:
           test "${#scripts[@]}" -gt 0
           shellcheck --severity=warning "${scripts[@]}"
 
+  # actionlint catches a broad class of workflow errors — bad expressions, unknown
+  # contexts, shell mistakes inside `run:` — that the YAML-shape assertions in
+  # tests/test_release.py do not look for.
+  #
+  # It does NOT catch the reusable-workflow permission ladder (a nested job
+  # requesting more than its caller grants), which GitHub rejects at parse time as
+  # an invalid workflow file. That one is covered by
+  # tests/test_release.py::test_called_workflows_fit_within_every_callers_grant,
+  # because it cost a broken release to find.
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: actionlint
+        run: |
+          set -euo pipefail
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
   test:
     runs-on: ${{ matrix.os }}
     strategy:

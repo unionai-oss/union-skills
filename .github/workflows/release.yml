@@ -5,11 +5,11 @@ name: release
 #   Actions -> release -> Run workflow -> release_version: v0.0.2
 #
 # It bumps the version in every manifest, stamps the changelog, commits, tags,
-# creates the GitHub release with the changelog section as its notes, and calls
-# publish.yml to push to PyPI. Nothing is pushed or published until every check
+# creates the GitHub release with the changelog section as its notes, and uploads
+# to PyPI. Nothing is pushed or published until every check
 # has passed, and `dry_run` (the default) stops before the first write.
 #
-# Why this exists: the version lives in three manifests and publish.yml refuses
+# Why this exists: the version lives in three manifests and the build refuses
 # a tag that disagrees with them, so releasing by hand meant a version-bump PR
 # followed by a tag push — two steps that could disagree. Here the same job
 # writes the manifests and the tag, so they cannot.
@@ -116,7 +116,7 @@ jobs:
           python packaging/set_version.py "${RELEASE_VERSION#v}"
           python packaging/changelog.py stamp "$RELEASE_VERSION" --notes release-notes.md
 
-      # The manifests and the tag are written by the same job, so publish.yml's
+      # The manifests and the tag are written by the same job, so the build's
       # tag-versus-manifest check cannot fail for a release cut this way.
       - name: Re-verify with the release version in place
         run: |
@@ -156,42 +156,52 @@ jobs:
           git push origin "$RELEASE_VERSION"
           echo "released=true" >> "$GITHUB_OUTPUT"
 
-      - name: Create the GitHub release
-        if: steps.push.outputs.released == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.release_version }}
-        run: |
-          gh release create "$RELEASE_VERSION" \
-            --title "$RELEASE_VERSION" \
-            --notes-file release-notes.md
-
+      # The GitHub release is created later, by `attach`, once PyPI actually has
+      # the version — see the comment there.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: release-notes
           path: release-notes.md
 
-  # Builds at the tag, re-runs the checks there, and publishes to PyPI. A job
-  # call rather than a tag-push trigger: a tag pushed with GITHUB_TOKEN does not
-  # start new workflow runs, so `on: push: tags` would never fire here.
-  publish:
+  # Builds at the tag and re-runs every check there. A job call rather than a
+  # tag-push trigger: a tag pushed with GITHUB_TOKEN does not start new workflow
+  # runs, so `on: push: tags` would never fire for an automated release.
+  build:
     needs: [tag]
     if: needs.tag.outputs.released == 'true'
-    # A reusable workflow can never hold MORE permission than the job calling it,
-    # so publish.yml's own `id-token: write` would be silently reduced to this
-    # workflow's `contents: read` and PyPI's OIDC exchange would fail. Granting it
-    # here is what makes trusted publishing work through a job call.
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/publish.yml
+    uses: ./.github/workflows/build-dists.yml
     with:
       tag: ${{ inputs.release_version }}
 
-  # Attach the built artifacts to the release publish.yml just built them for.
+  # The upload runs HERE, in a top-level job of the triggered workflow, not inside
+  # build-dists.yml. PyPI trusted publishing matches the OIDC `workflow_ref`
+  # claim, which names the triggered workflow, and PyPI cannot name a reusable
+  # workflow as a publisher at all (pypi/warehouse#11096) -- so the publisher
+  # config for this repo names THIS file. See RELEASING.md.
+  pypi:
+    needs: [build]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # PyPI trusted publishing — no API token needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pypi-union-skills
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Re-running a release should be a no-op, not a hard failure.
+          skip-existing: true
+
+  # Creates the GitHub release, with the changelog section as its notes and the
+  # artifacts attached. Deliberately last: creating it in the `tag` job would
+  # leave a release advertising a version PyPI never received if the upload
+  # failed. A failed release now leaves only a tag, which is recoverable — see
+  # RELEASING.md.
   attach:
-    needs: [tag, publish]
+    needs: [tag, pypi]
     if: needs.tag.outputs.released == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -201,9 +211,23 @@ jobs:
         with:
           name: release-assets
           path: release-assets
-      - name: Upload the wheel, sdist and npm tarball to the release
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: notes
+      - name: Create the release with the changelog notes and the artifacts
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.release_version }}
           GH_REPO: ${{ github.repository }}
-        run: gh release upload "$RELEASE_VERSION" release-assets/* --clobber
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_VERSION" \
+            --title "$RELEASE_VERSION" \
+            --notes-file notes/release-notes.md \
+            release-assets/* \
+          || {
+            # A re-run after a partial failure: the release already exists.
+            gh release edit "$RELEASE_VERSION" --notes-file notes/release-notes.md
+            gh release upload "$RELEASE_VERSION" release-assets/* --clobber
+          }
