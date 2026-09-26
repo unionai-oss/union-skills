@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "flyte-docs": {
+      "type": "http",
+      "url": "https://flyte-mcp.apps.demo.hosted.unionai.cloud/flyte-mcp/mcp"
+    },
+    "flyte-cluster": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "flyte[mcp]",
+        "flyte-mcp",
+        "--transport",
+        "stdio",
+        "--tool-groups",
+        "task,run,action,logs,app,trigger,project,secret,condition,identity",
+        "--no-init-from-config"
+      ]
+    }
+  }
+}

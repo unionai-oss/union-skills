@@ -1,0 +1,44 @@
+# Tooling config for the union-skills repo itself.
+#
+# This is NOT the published package: `packaging/build.py` generates that, with
+# its own pyproject.toml, from plugins/union/. This file only configures the
+# linters and the test suite that guard the payload.
+
+[project]
+name = "union-skills-repo"
+version = "0.0.0"
+description = "Repo tooling for union-skills. Not published; see packaging/build.py."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "build>=1.2",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+# The build/ tree is generated; linting it just re-lints the templates.
+extend-exclude = ["build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+    "E501",    # line length is handled by the formatter, not enforced here
+    "B008",    # argparse/dataclass defaults in signatures are idiomatic here
+    "SIM105",  # contextlib.suppress is not clearer in the CLI's error paths
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The CLI templates are copied verbatim into the published package and must run
+# on Python 3.9, so they keep `from __future__ import annotations` and avoid
+# newer syntax that UP would otherwise push them toward.
+"packaging/templates/cli.py" = ["UP006", "UP007", "UP045"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+filterwarnings = ["error"]

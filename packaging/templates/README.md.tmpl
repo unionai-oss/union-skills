@@ -1,0 +1,104 @@
+# {{DIST}}
+
+{{DESCRIPTION}}
+
+{{SKILL_COUNT}} [Agent Skills](https://agentskills.io) for [Union.ai](https://www.union.ai),
+packaged for every agent harness — plus two MCP servers (`flyte-docs`, `flyte-cluster`) for
+harnesses that read the bundled `.mcp.json`.
+
+The skills walk an agent and a human through Union.ai
+[self-serve setup](https://www.union.ai/docs/v2/union/deployment/self-serve/) together:
+provisioning AWS, connecting a cluster, running workflows, and debugging a data plane that
+will not come up. Every command that creates a cloud resource is an explicit approval gate,
+and every value that has to cross between the terminal and the Union.ai UI is marked as a
+hand-off.
+
+## Install
+
+<!-- pypi-only:start -->
+```bash
+uvx {{DIST}} install
+```
+
+Or `pip install {{DIST}}` and then `{{DIST}} install`.
+<!-- pypi-only:end -->
+<!-- npm-only:start -->
+### As a Claude Code plugin (npm source)
+
+Add an entry to your marketplace's `marketplace.json`:
+
+```json
+{
+  "name": "union",
+  "source": { "source": "npm", "package": "{{DIST}}", "version": "^{{VERSION}}" }
+}
+```
+
+Claude Code runs `npm install` and reads `.claude-plugin/plugin.json` from the package root.
+
+### As a CLI that copies skills into your harness
+
+```bash
+npx {{DIST}} install
+```
+<!-- npm-only:end -->
+
+The CLI auto-detects which harnesses are set up on the machine and copies the skills into
+each one's skills directory:
+
+| `--target` | User-level directory | Project-level (`--project`) | Read by |
+|---|---|---|---|
+| `agents` | `~/.agents/skills/` | `.agents/skills/` | Codex, Hermes (project), any harness following the convention |
+| `claude` | `~/.claude/skills/` | `.claude/skills/` | Claude Code |
+| `hermes` | `~/.hermes/skills/` | `.hermes/skills/` | Hermes |
+| `opencode` | `~/.config/opencode/skills/` | `.opencode/skills/` | opencode |
+| `pi` | `~/.pi/agent/skills/` | — | pi |
+
+```bash
+{{DIST}} install --target claude --target hermes  # pick harnesses explicitly
+{{DIST}} install --target agents                  # the cross-harness standard location
+{{DIST}} install --dir ./somewhere/skills         # arbitrary directory
+{{DIST}} install --project                        # this repo only
+{{DIST}} install --dry-run                        # show what would change
+{{DIST}} uninstall                                # remove them again
+{{DIST}} list                                     # list bundled skills
+{{DIST}} path                                     # print the bundled plugin root
+```
+
+## MCP servers
+
+`{{DIST}} install` writes skills only. `{{DIST}} mcp install` adds the two bundled MCP
+servers as well, by driving `claude mcp add-json` / `codex mcp add` rather than editing
+config files — so it needs one of those CLIs on your PATH:
+
+```bash
+{{DIST}} mcp list                     # what would be added
+{{DIST}} mcp install --dry-run        # print the commands, change nothing
+{{DIST}} mcp install                  # add them
+{{DIST}} mcp uninstall                # remove them again
+```
+
+These are tools the agent can call, not inert markdown: `flyte-docs` sends search queries to
+a Union-operated endpoint, and `flyte-cluster` gets control-plane access to your Union.ai
+organization (which also needs `uv` and a login). Union.ai uses the same `flyte` SDK and CLI
+as open-source Flyte, which is why the servers carry those names.
+
+Harnesses that consume the whole plugin (Claude Code, Codex) pick the servers up from
+`.mcp.json` automatically and need none of this.
+
+## Native install paths
+
+If you'd rather install from git than from a registry, the repo is a plugin marketplace in
+its own right:
+
+```
+/plugin marketplace add unionai-oss/union-skills
+/plugin install union@union-skills
+```
+
+See [the repository README]({{REPO_URL}}#readme) for Codex, Hermes, opencode and pi
+instructions, the full skill list, and MCP server details.
+
+## License
+
+Apache-2.0
