@@ -8,6 +8,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch: {}
+  # Called by release.yml so a release runs the same checks a PR does.
+  workflow_call: {}
 
 permissions:
   contents: read
@@ -62,5 +64,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install --upgrade pytest build
+      - run: python -m pip install --upgrade pytest build pyyaml
       - run: python -m pytest

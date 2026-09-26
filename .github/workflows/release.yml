@@ -1,0 +1,209 @@
+name: release
+
+# Cut a release from the Actions tab. One button, no local git.
+#
+#   Actions -> release -> Run workflow -> release_version: v0.0.2
+#
+# It bumps the version in every manifest, stamps the changelog, commits, tags,
+# creates the GitHub release with the changelog section as its notes, and calls
+# publish.yml to push to PyPI. Nothing is pushed or published until every check
+# has passed, and `dry_run` (the default) stops before the first write.
+#
+# Why this exists: the version lives in three manifests and publish.yml refuses
+# a tag that disagrees with them, so releasing by hand meant a version-bump PR
+# followed by a tag push — two steps that could disagree. Here the same job
+# writes the manifests and the tag, so they cannot.
+#
+# Requirements:
+#   - `main` must accept a push from github-actions[bot]. If it is protected,
+#     either allow the bot to bypass or keep using the manual path in
+#     RELEASING.md. This workflow pushes one commit to main.
+#   - CHANGELOG.md must already have a `## [vX.Y.Z]` section for the version.
+#     Write it in the PR that finishes the work, not here.
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Version to release, e.g. v0.0.2"
+        type: string
+        required: true
+      dry_run:
+        description: "Validate everything and stop before tagging or publishing"
+        type: boolean
+        default: true
+      allow_same_version:
+        description: "Release the version already in the manifests (first release only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # Everything that can say "no" cheaply, before any check burns runner minutes.
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # check_release.py needs the tags
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Version is releasable
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          ALLOW_SAME: ${{ inputs.allow_same_version }}
+        run: |
+          set -euo pipefail
+          ARGS=("$RELEASE_VERSION")
+          [ "$ALLOW_SAME" = "true" ] && ARGS+=(--allow-same)
+          python packaging/check_release.py "${ARGS[@]}"
+      - name: Changelog has notes for this version
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: python packaging/changelog.py check "$RELEASE_VERSION"
+      - name: Show the release notes that will be published
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          {
+            echo "## Release notes for \`$RELEASE_VERSION\`"
+            echo
+            python packaging/changelog.py show "$RELEASE_VERSION"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The same checks a PR gets. A release should never be the first time these run
+  # against this commit, but it should never be possible to skip them either.
+  ci:
+    needs: [preflight]
+    uses: ./.github/workflows/ci.yml
+
+  packaging:
+    needs: [preflight]
+    uses: ./.github/workflows/packaging.yml
+
+  # The first job that writes anything. Everything above must be green.
+  tag:
+    needs: [preflight, ci, packaging]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      released: ${{ steps.push.outputs.released }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump the manifests and stamp the changelog
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          set -euxo pipefail
+          python packaging/set_version.py "${RELEASE_VERSION#v}"
+          python packaging/changelog.py stamp "$RELEASE_VERSION" --notes release-notes.md
+
+      # The manifests and the tag are written by the same job, so publish.yml's
+      # tag-versus-manifest check cannot fail for a release cut this way.
+      - name: Re-verify with the release version in place
+        run: |
+          python -m pip install --upgrade build --quiet
+          python packaging/verify.py
+
+      - name: Commit and tag
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          set -euxo pipefail
+          git add -A
+          # --allow-empty: on the first release the manifests may already carry
+          # this version, so set_version.py is a no-op and there is nothing to add.
+          git commit --allow-empty -m "Release $RELEASE_VERSION"
+          git tag "$RELEASE_VERSION"
+
+      - name: Push (skipped on a dry run)
+        id: push
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Dry run — nothing was pushed"
+              echo
+              echo "Would have pushed commit \`$(git rev-parse --short HEAD)\` and tag \`$RELEASE_VERSION\` to \`${GITHUB_REF_NAME}\`, then published to PyPI."
+              echo
+              echo "Re-run with **dry_run unchecked** to release."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "$RELEASE_VERSION"
+          echo "released=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create the GitHub release
+        if: steps.push.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          gh release create "$RELEASE_VERSION" \
+            --title "$RELEASE_VERSION" \
+            --notes-file release-notes.md
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-notes
+          path: release-notes.md
+
+  # Builds at the tag, re-runs the checks there, and publishes to PyPI. A job
+  # call rather than a tag-push trigger: a tag pushed with GITHUB_TOKEN does not
+  # start new workflow runs, so `on: push: tags` would never fire here.
+  publish:
+    needs: [tag]
+    if: needs.tag.outputs.released == 'true'
+    # A reusable workflow can never hold MORE permission than the job calling it,
+    # so publish.yml's own `id-token: write` would be silently reduced to this
+    # workflow's `contents: read` and PyPI's OIDC exchange would fail. Granting it
+    # here is what makes trusted publishing work through a job call.
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/publish.yml
+    with:
+      tag: ${{ inputs.release_version }}
+
+  # Attach the built artifacts to the release publish.yml just built them for.
+  attach:
+    needs: [tag, publish]
+    if: needs.tag.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets
+      - name: Upload the wheel, sdist and npm tarball to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$RELEASE_VERSION" release-assets/* --clobber

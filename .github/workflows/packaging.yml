@@ -18,6 +18,8 @@ on:
       - "package.json"
       - ".github/workflows/packaging.yml"
   workflow_dispatch: {}
+  # Called by release.yml so a release runs the same checks a PR does.
+  workflow_call: {}
 
 permissions:
   contents: read

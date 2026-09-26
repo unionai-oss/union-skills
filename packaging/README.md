@@ -32,6 +32,8 @@ signal — they answer "is adoption trending up", not "how many teams use this".
 packaging/
 ├── build.py            # generates both source trees into ./build
 ├── set_version.py      # writes one version into every manifest
+├── check_release.py    # refuses a release that cannot succeed, before tagging
+├── changelog.py        # validates, stamps and extracts CHANGELOG.md sections
 ├── verify.py           # builds + installs each distribution, asserts contents
 └── templates/
     ├── cli.py          # the Python installer CLI (PyPI)
@@ -64,8 +66,24 @@ pytest                             # content lint + unit tests
 
 ## Cutting a release
 
-See [`RELEASING.md`](../RELEASING.md). In short: `packaging/set_version.py` sets the version,
-that lands on `main` through a PR, and pushing a matching `v*` tag triggers the publish.
+See [`RELEASING.md`](../RELEASING.md). In short: **Actions → `release` → Run workflow**, with
+a `vX.Y.Z` version. That one dispatch bumps the manifests, stamps the changelog, commits,
+tags, creates the GitHub release, and calls `publish.yml` to upload to PyPI — with `dry_run`
+on by default so you can rehearse the whole thing first.
+
+`release.yml` calls `publish.yml` as a *job* rather than letting the tag push trigger it,
+which is not a stylistic choice: **a tag pushed with `GITHUB_TOKEN` deliberately does not
+start new workflow runs.** A `on: push: tags` trigger would simply never fire for an
+automated release. The same constraint is why `ci.yml` and `packaging.yml` carry a
+`workflow_call` trigger — a release runs the identical checks a PR does, from the same files,
+rather than a drifting copy.
+
+One consequence worth knowing: a reusable workflow can never hold *more* permission than the
+job calling it, so `release.yml`'s `publish` job has to grant `id-token: write` explicitly.
+Without it, `publish.yml`'s own declaration is silently reduced and PyPI's OIDC exchange
+fails.
+
+Pushing a `v*` tag by hand still works and still publishes; that is the fallback path.
 
 `.github/workflows/publish.yml` then:
 
@@ -81,7 +99,7 @@ To rehearse without publishing, run the workflow manually with `dry_run: true` (
 — it does everything through step 3 and stops.
 
 `.github/workflows/packaging.yml` runs step 2 on every PR that touches `plugins/**` or
-`packaging/**`.
+`packaging/**`, and `release.yml` calls it again before it writes anything.
 
 ## One-time setup
 
