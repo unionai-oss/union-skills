@@ -1,14 +1,18 @@
 name: publish
 
-# Publishes `union-skills` to PyPI from one source of truth (plugins/union).
+# Publishes `union-skills` to PyPI. Three ways in:
 #
-# npm publishing is DISABLED for now (see the `npm` job) while distribution
-# focuses on pip/uvx. The npm package is still built, packed and validated on
-# every run, so it stays releasable the moment that changes.
+#   1. `release.yml` calls this as a job, passing the tag it just pushed. This is
+#      the normal path. It has to be a job call rather than relying on the tag
+#      push to trigger us: a tag pushed with GITHUB_TOKEN deliberately does NOT
+#      start new workflow runs, so a `on: push: tags` trigger would never fire
+#      for an automated release.
+#   2. A human pushes a `v*` tag by hand. The fallback path, still supported.
+#   3. Manual dispatch, for rehearsing. Defaults to dry_run, publishing nothing.
 #
-# Release: `python packaging/set_version.py X.Y.Z`, land it on main, then push
-# tag vX.Y.Z. The build job refuses to continue unless the tag matches the
-# plugin manifest.
+# npm publishing is DISABLED (see the `npm` job) while distribution focuses on
+# pip/uvx. The npm package is still built, packed and validated on every run, so
+# it stays releasable the moment that changes.
 #
 # One-time setup (see packaging/README.md):
 #   - a GitHub environment named `pypi`
@@ -19,6 +23,12 @@ name: publish
 on:
   push:
     tags: ["v*"]
+  workflow_call:
+    inputs:
+      tag:
+        description: "Tag to build and publish, e.g. v0.0.2"
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       dry_run:
@@ -30,7 +40,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: publish-${{ github.ref }}
+  group: publish-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -39,14 +49,18 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
+      # `inputs.tag` when called by release.yml; otherwise whatever ref fired us
+      # (the tag for a tag push, the branch for a dispatch).
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: python -m pip install --upgrade build twine pytest
+      - run: python -m pip install --upgrade build twine pytest pyyaml
 
       - id: version
         name: Read the version from the plugin manifest
@@ -58,14 +72,24 @@ jobs:
       # A tag that disagrees with the manifest would publish a version nobody
       # can trace back to a commit, so fail loudly instead.
       - name: Tag must match the manifest version
-        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
+          set -euo pipefail
+          TAG="${RELEASE_TAG:-}"
+          if [ -z "$TAG" ] && [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            TAG="$GITHUB_REF_NAME"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "No tag to check (manual dispatch); skipping."
+            exit 0
+          fi
           VERSION="${{ steps.version.outputs.version }}"
-          if [ "$TAG" != "$VERSION" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match manifest version $VERSION. Run packaging/set_version.py $TAG and re-tag."
+          if [ "${TAG#v}" != "$VERSION" ]; then
+            echo "::error::tag $TAG does not match manifest version $VERSION. Run packaging/set_version.py ${TAG#v} and re-tag."
             exit 1
           fi
+          echo "tag $TAG matches manifest $VERSION"
 
       # The content lint runs here too: a release is the last place to discover
       # that a skill links to a page that no longer exists.
@@ -105,7 +129,14 @@ jobs:
 
   pypi:
     needs: build
-    if: github.event_name == 'push' || inputs.dry_run == false
+    # Publish when release.yml called us with a tag, or when a human pushed a
+    # tag, or when a dispatch explicitly opted out of dry_run. A bare
+    # `inputs.dry_run == false` would also be true when dry_run is simply absent
+    # (a workflow_call declares no such input), so it is scoped to the dispatch.
+    if: >-
+      inputs.tag != ''
+      || github.ref_type == 'tag'
+      || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false)
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -121,8 +152,7 @@ jobs:
           skip-existing: true
 
   # DISABLED: npm publishing is off while distribution focuses on pip/uvx.
-  # To turn it on: restore the `if:` below to
-  #   github.event_name == 'push' || inputs.dry_run == false
+  # To turn it on: restore the `if:` below to match the `pypi` job's condition,
   # then create an `npm` environment holding an NPM_TOKEN secret.
   #
   # npm needs a token for the FIRST publish, unlike PyPI: npm has no equivalent
@@ -160,9 +190,12 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-  release:
+  # Only for a hand-pushed tag. When release.yml drives the release it creates
+  # the GitHub release itself, with the changelog section as the notes, and
+  # attaches the artifacts there.
+  attach-assets:
     needs: [pypi]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.ref_type == 'tag' && inputs.tag == ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
