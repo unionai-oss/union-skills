@@ -24,10 +24,14 @@ The order is deliberate — every check runs *before* anything is written:
    the run summary so you can read them before committing to them.
 2. **ci** and **packaging** — the same checks a PR gets, via the same workflow files.
 3. **tag** — the first job that writes. Bumps, stamps, re-runs `verify.py` with the release
-   version in place, commits, tags, pushes, creates the release.
+   version in place, commits, tags, pushes.
 4. **build** → **pypi** → **attach** — builds at the tag via `build-dists.yml`, re-runs
-   every check there, uploads to PyPI, and attaches the wheel, sdist and npm tarball to the
-   release.
+   every check there, uploads to PyPI, and only then creates the GitHub release, with the
+   changelog section as its notes and the wheel, sdist and npm tarball attached.
+
+The release is created **last, after PyPI has the version**. Creating it earlier would leave
+a release advertising a version PyPI never received if the upload failed; this way a failed
+release leaves only a tag.
 
 `dry_run` stops after step 3's local commit, before any push, and tells you in the run
 summary exactly what it would have done. Rehearsing costs a few runner minutes and nothing
@@ -73,11 +77,18 @@ forward and needs nothing special.
 - **The tag already exists.** Preflight refuses it. PyPI versions are immutable, so a
   re-release cannot replace what is already published — bump to the next patch.
 - **PyPI rejects the version as already used.** Same cause, caught later. Bump and re-run.
-- **A job failed after the tag was pushed.** The tag and GitHub release exist but PyPI does
-  not have the version. The tag is already correct, so do not re-run `release`. Re-run the
-  failed `tag-push` run for that tag instead, or re-push the tag to trigger a fresh one
-  (`git push origin :refs/tags/v0.0.2 && git push origin v0.0.2` — safe, since the tag
-  points at the same commit).
+- **A job failed after the tag was pushed.** The tag exists and the version bump is on
+  `main`, but PyPI may not have the version and the GitHub release may not exist. The tag is
+  already correct, so do not re-run `release` — it would refuse the version anyway. Instead
+  re-push the tag to trigger `tag-push.yml`, which builds and publishes from it:
+
+  ```bash
+  git push origin :refs/tags/v0.0.2 && git push origin v0.0.2
+  ```
+
+  Safe, because the tag points at the same commit. `skip-existing` makes the PyPI upload a
+  no-op if it did land, and the `attach` job updates an existing release rather than
+  failing.
 
 ## The manual path
 

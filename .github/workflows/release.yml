@@ -156,16 +156,8 @@ jobs:
           git push origin "$RELEASE_VERSION"
           echo "released=true" >> "$GITHUB_OUTPUT"
 
-      - name: Create the GitHub release
-        if: steps.push.outputs.released == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.release_version }}
-        run: |
-          gh release create "$RELEASE_VERSION" \
-            --title "$RELEASE_VERSION" \
-            --notes-file release-notes.md
-
+      # The GitHub release is created later, by `attach`, once PyPI actually has
+      # the version — see the comment there.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -203,7 +195,11 @@ jobs:
           # Re-running a release should be a no-op, not a hard failure.
           skip-existing: true
 
-  # Attach the built artifacts to the release created above.
+  # Creates the GitHub release, with the changelog section as its notes and the
+  # artifacts attached. Deliberately last: creating it in the `tag` job would
+  # leave a release advertising a version PyPI never received if the upload
+  # failed. A failed release now leaves only a tag, which is recoverable — see
+  # RELEASING.md.
   attach:
     needs: [tag, pypi]
     if: needs.tag.outputs.released == 'true'
@@ -215,9 +211,23 @@ jobs:
         with:
           name: release-assets
           path: release-assets
-      - name: Upload the wheel, sdist and npm tarball to the release
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: notes
+      - name: Create the release with the changelog notes and the artifacts
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.release_version }}
           GH_REPO: ${{ github.repository }}
-        run: gh release upload "$RELEASE_VERSION" release-assets/* --clobber
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_VERSION" \
+            --title "$RELEASE_VERSION" \
+            --notes-file notes/release-notes.md \
+            release-assets/* \
+          || {
+            # A re-run after a partial failure: the release already exists.
+            gh release edit "$RELEASE_VERSION" --notes-file notes/release-notes.md
+            gh release upload "$RELEASE_VERSION" release-assets/* --clobber
+          }
