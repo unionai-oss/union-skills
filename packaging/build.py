@@ -219,6 +219,13 @@ include = ["src", "README.md", "LICENSE", "pyproject.toml"]
 artifacts = ["src/{MODULE}/plugin/**"]
 """
     (pkg / "pyproject.toml").write_text(pyproject)
+
+    # hatchling always ships a .gitignore in the sdist, and neither `include` nor
+    # `exclude` suppresses it. Without one here it walks up and ships whatever it
+    # finds -- the repo root's, when the tree is built in-place. Writing our own
+    # makes the sdist byte-identical whether it is built inside the repo (as the
+    # release workflow does) or in a temp directory (as verify.py does).
+    (pkg / ".gitignore").write_text("dist/\n*.egg-info/\n")
     return pkg
 
 

@@ -170,18 +170,42 @@ def check_npm(pkg: Path, workdir: Path) -> None:
     )
 
 
-def build_wheel(pkg: Path) -> Path:
+def check_sdist(pkg: Path) -> None:
+    """The sdist must carry exactly what we intend and nothing else.
+
+    The generated tree lives inside this repo, so a build backend that walks up
+    for VCS context can sweep in files that were never ours to publish.
+    """
+    print("sdist")
+    import tarfile
+
+    sdist = next((pkg / "dist").glob("*.tar.gz"))
+    with tarfile.open(sdist) as tf:
+        names = tf.getnames()
+    root = f"{builder.MODULE}-{builder.version()}"
+    top = {n[len(root) + 1 :].split("/")[0] for n in names if n != root and "/" in n}
+    expected = {"src", "README.md", "LICENSE", "pyproject.toml", "PKG-INFO", ".gitignore"}
+    check(top == expected, f"sdist top level is exactly {sorted(expected)}, got {sorted(top)}")
+    check(
+        any(n.endswith(f"{builder.MODULE}/plugin/skills/union-self-serve/SKILL.md") for n in names),
+        "sdist carries the skill payload",
+    )
+
+
+def build_dists(pkg: Path) -> Path:
+    """Build both the sdist and the wheel; return the wheel."""
     try:
-        run([sys.executable, "-m", "build", "--wheel"], cwd=pkg)
+        run([sys.executable, "-m", "build"], cwd=pkg)
     except (subprocess.CalledProcessError, FileNotFoundError):
-        run(["uv", "build", "--wheel"], cwd=pkg)
+        run(["uv", "build"], cwd=pkg)
     return next((pkg / "dist").glob("*.whl"))
 
 
 def check_pypi(pkg: Path, workdir: Path, npm_pkg: Path) -> None:
     dist, mod = builder.DIST, builder.MODULE
     print(f"pypi {dist}")
-    wheel = build_wheel(pkg)
+    wheel = build_dists(pkg)
+    check_sdist(pkg)
 
     names = set(zipfile.ZipFile(wheel).namelist())
     check(
