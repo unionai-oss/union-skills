@@ -149,17 +149,13 @@ packaging/                generates the PyPI and npm trees from it
   templates/cli.py        the Python installer CLI  } two implementations of one
   templates/cli.mjs       the Node installer CLI     } contract; verify.py diffs them
 tests/                    content lint, CLI behaviour, build fan-out
-.github/workflows/        ci, packaging, build-dists (shared), release, tag-push
+.github/workflows/        ci (lint, shellcheck, actionlint, pytest), packaging, publish
 ```
 
-Releases are cut from the Actions tab — **`release` → Run workflow** with a `vX.Y.Z`
-version, `dry_run` on to rehearse. It bumps the manifests, stamps `CHANGELOG.md`, tags,
-creates the GitHub release, and publishes to PyPI. See [RELEASING.md](RELEASING.md) for the
-whole flow and the one-time PyPI setup, and [packaging/README.md](packaging/README.md) for
-how the distributions are built.
-
-Add a `## [vX.Y.Z]` section to [CHANGELOG.md](CHANGELOG.md) in the PR that finishes the
-work — the release refuses to run without notes, and uses that section as the release body.
+Releases: `packaging/set_version.py` sets the version, that lands on `main` through a PR,
+and pushing a matching `v*` tag publishes to PyPI and creates the GitHub release. The full
+checklist and the one-time PyPI setup are in [RELEASING.md](RELEASING.md); how the
+distributions are built is in [packaging/README.md](packaging/README.md).
 
 ### Adding a skill
 

@@ -8,8 +8,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch: {}
-  # Called by release.yml so a release runs the same checks a PR does.
-  workflow_call: {}
 
 permissions:
   contents: read
@@ -64,7 +62,11 @@ jobs:
         run: |
           set -euo pipefail
           bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
-          ./actionlint -color
+          # The npm publish job is parked behind `if: false` on purpose — the
+          # package is built and validated on every run so it stays releasable,
+          # but nothing is uploaded until npm distribution is turned on. See
+          # packaging/README.md. actionlint reads that as a dead branch.
+          ./actionlint -color -ignore 'constant expression "false" in condition'
 
   test:
     runs-on: ${{ matrix.os }}
