@@ -32,8 +32,6 @@ signal — they answer "is adoption trending up", not "how many teams use this".
 packaging/
 ├── build.py            # generates both source trees into ./build
 ├── set_version.py      # writes one version into every manifest
-├── check_release.py    # refuses a release that cannot succeed, before tagging
-├── changelog.py        # validates, stamps and extracts CHANGELOG.md sections
 ├── verify.py           # builds + installs each distribution, asserts contents
 └── templates/
     ├── cli.py          # the Python installer CLI (PyPI)
@@ -66,74 +64,51 @@ pytest                             # content lint + unit tests
 
 ## Cutting a release
 
-See [`RELEASING.md`](../RELEASING.md). In short: **Actions → `release` → Run workflow**, with
-a `vX.Y.Z` version. That one dispatch bumps the manifests, stamps the changelog, commits,
-tags, creates the GitHub release, and uploads to PyPI — with `dry_run`
-on by default so you can rehearse the whole thing first.
+See [`RELEASING.md`](../RELEASING.md). In short: `packaging/set_version.py` sets the version,
+that lands on `main` through a PR, and pushing a matching `v*` tag triggers the publish.
 
-### How the workflows fit together
+The release path is deliberately **one self-contained workflow**. It is not factored into
+reusable pieces, and that is a decision rather than an omission:
 
-```
-release.yml   (dispatch)          tag-push.yml  (on: push tags v*)
-  preflight                         │
-  ci ─────────┐                     │
-  packaging ──┤                     │
-  tag         │                     │
-  build ──────┴──▶ build-dists.yml ◀┴── build      ← shared, no elevated perms
-  pypi          (build + validate)      pypi       ← upload lives HERE
-  attach                                attach
-```
+* **PyPI trusted publishing matches the OIDC `workflow_ref` claim** — the workflow that was
+  *triggered* — and PyPI cannot name a reusable workflow as a publisher at all
+  ([pypi/warehouse#11096](https://github.com/pypi/warehouse/issues/11096)). Keeping the
+  upload in the tag-triggered workflow makes the publisher config exactly `publish.yml`.
+* **A called workflow's nested permissions are validated when the file is parsed.** A job
+  requesting more than its caller grants makes the whole call an *invalid workflow file*,
+  not a skipped job — an `if:` on it does not help.
 
-Three constraints produced that shape, and none of them is obvious:
+Both of those cost a broken release to learn, so `tests/test_release.py` asserts the release
+path stays in one triggered workflow.
 
-1. **A tag pushed with `GITHUB_TOKEN` does not start new workflow runs.** So `release.yml`
-   cannot rely on its own tag push triggering anything; it calls the build as a job. This is
-   also why `ci.yml` and `packaging.yml` carry `workflow_call` — a release runs the identical
-   checks a PR does, from the same files, rather than a drifting copy.
-2. **PyPI trusted publishing names a workflow that is *triggered*.** It matches the OIDC
-   `workflow_ref` claim, and PyPI cannot name a reusable workflow as a publisher at all
-   ([pypi/warehouse#11096](https://github.com/pypi/warehouse/issues/11096)). So the upload
-   runs in a top-level job of each entry workflow, and there is one publisher per entry
-   workflow. `build-dists.yml` never uploads.
-3. **A called workflow's nested permissions are validated when the file is parsed.** A job
-   requesting more than the caller grants is an *invalid workflow file*, not a skipped job —
-   an `if:` on it does not help. So `build-dists.yml` stays at `contents: read` and callers
-   grant it nothing; every elevated permission lives in an entry workflow.
-
-`tests/test_release.py` asserts all three, because each one fails in a way that is only
-discoverable by trying to cut a release.
-
-`.github/workflows/build-dists.yml` then:
+`.github/workflows/publish.yml` then:
 
 1. refuses to continue unless the tag matches the plugin manifest version;
 2. runs `pytest` and `verify.py` — a package that does not install, or a skill that links to
    a page that does not exist, is never published;
 3. builds the npm tarball and the sdist/wheel, and runs `npm publish --dry-run` and
    `twine check`;
-4. hands the artifacts to the entry workflow, which uploads to PyPI via trusted
-   publishing — no API token stored anywhere;
+4. publishes to PyPI via trusted publishing — no API token stored anywhere;
 5. attaches every artifact to the GitHub release.
 
 To rehearse without publishing, run the workflow manually with `dry_run: true` (the default)
 — it does everything through step 3 and stops.
 
 `.github/workflows/packaging.yml` runs step 2 on every PR that touches `plugins/**` or
-`packaging/**`, and `release.yml` calls it again before it writes anything.
+`packaging/**`, and `.github/workflows/ci.yml` runs the linters and the test suite.
 
 ## One-time setup
 
-A `pypi` GitHub environment and two PyPI trusted publishers for `union-skills` — see
+A `pypi` GitHub environment and a PyPI trusted publisher for `union-skills` — see
 [First-time setup](../RELEASING.md#first-time-setup) for the exact values. No API token is
 stored; the workflow's `id-token: write` permission is what authenticates, and PyPI's
 *pending publishers* let that work for a name that does not exist yet.
 
 ## Enabling npm
 
-npm publishing has no job yet — `build-dists.yml` packs and validates the tarball but never
-uploads it. To turn it on, add an `npm` job alongside `pypi` in **each entry workflow**
-(`release.yml` and `tag-push.yml`), with `permissions: {id-token: write}` and
-`environment: npm`; it cannot live in `build-dists.yml`, for the same reason the PyPI upload
-cannot. Then create the `npm` environment and add the token described below.
+The `npm` job in `publish.yml` is gated behind `if: false`. To turn it on: restore the
+condition to match the `pypi` job's, create an `npm` environment, and add the token described
+below.
 
 **npm needs a token for the first publish, unlike PyPI.** npm has no equivalent of PyPI's
 pending publishers: a trusted publisher can only be configured on a package that already
