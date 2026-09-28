@@ -282,8 +282,10 @@ kubectl get nodes    # Auto Mode nodes should start appearing now that there are
 ```
 
 Poll at roughly 30-second intervals, and give the human a one-line status each time rather
-than dumping full pod tables. Done when the panel reads **Complete** and the cluster list
-shows **Healthy**.
+than dumping full pod tables. Done when the panel reads **Complete** and the badge next to
+the cluster's name on its own page turns green and reads **Healthy** — that badge is the one
+that was showing **Unhealthy** all through the install, so tell the human to watch it there
+rather than going back to the cluster list.
 
 Still not Complete after ~15 minutes, or pods in `CrashLoopBackOff`, `ImagePullBackOff` or
 `Pending` → **`union-debug-cluster`**.
