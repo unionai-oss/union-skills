@@ -14,6 +14,26 @@ Disconnect the cluster in the Union.ai UI first. Deleting the EKS cluster out fr
 connected pool leaves Union.ai holding a registration for a cluster that no longer answers,
 and the UI shows it as permanently unhealthy.
 
+**Check for more than one registration.** A cluster that was connected, disconnected and
+reconnected — or registered from two organizations — carries several data plane installs at
+once, and *each* needs disconnecting in the UI. Count them from the cluster side:
+
+```bash
+# 🟢 READ-ONLY — one namespace per data plane install
+kubectl get ns -o name | grep '^namespace/instance-'
+kubectl get ns -l omnistrate.com/managed-by=omnistrate \
+  -o custom-columns='NS:.metadata.name,HOST:.metadata.labels.omnistrate\.com/host-cluster-id' 2>/dev/null
+helm -n dataplane-agent list      # REVISION well above 1 suggests repeated re-registration
+```
+
+Distinct `host-cluster-id` values are **distinct registrations** against this one EKS
+cluster, not duplicates to ignore. The organization name is not recoverable from these
+labels — `creator-org-name` is an opaque slug — so the human identifies them by finding the
+cluster name in each organization's cluster list.
+
+Because this is a UI step the agent cannot do or verify, **keep it on the visible blocked
+list until the human confirms it**, and do not start step 2 on the assumption it happened.
+
 Then confirm what you are about to destroy:
 
 ```bash
