@@ -133,6 +133,7 @@ source "${UNION_ENV_FILE:-$PWD/.union-selfserve.env}"
 printf '%s\n' \
   "Connect a cluster:" \
   "  Name                 <choose — see below>" \
+  "  Namespace            union" \
   "  System IAM Role ARN  ${SYSTEM_IAM_ROLE_ARN}" \
   "  Task IAM Role ARN    ${TASK_IAM_ROLE_ARN}"
 ```
@@ -140,6 +141,45 @@ printf '%s\n' \
 **Ask the human for the name before they type it.** It identifies the cluster in Union.ai
 and **cannot be changed once connected**. Suggest the EKS cluster's own name so the two
 never drift apart, and do not pick one for them.
+
+### The Namespace field
+
+The dialog asks for a **Namespace** — "The namespace Union is installed into on your
+cluster" — warning that *"Your IAM or Workload Identity trust must name it."* That warning
+makes people think they have to go back and edit IAM. **They do not**, if the roles came
+from `union-provision-aws`.
+
+Answer: **`union`**, the pre-filled default.
+
+It works because both trust policies wildcard the *namespace* segment via `StringLike`:
+
+```
+system role : system:serviceaccount:*:union-system
+              system:serviceaccount:*:flytepropeller-system
+task role   : system:serviceaccount:*:default
+              system:serviceaccount:*:union
+```
+
+The `*` is the namespace, so whatever is typed here matches. Verify rather than assert, if
+there is any doubt about where the roles came from:
+
+```bash
+# 🟢 READ-ONLY
+source "${UNION_ENV_FILE:-$PWD/.union-selfserve.env}"
+aws iam get-role --role-name "$SYSTEM_ROLE_NAME" \
+  --query 'Role.AssumeRolePolicyDocument.Statement[0].Condition.StringLike' --output json
+aws iam get-role --role-name "$TASK_ROLE_NAME" \
+  --query 'Role.AssumeRolePolicyDocument.Statement[0].Condition.StringLike' --output json
+```
+
+If those come back with a **literal** namespace instead of `*` — someone narrowed them per
+[iam-policies.md](../union-provision-aws/references/iam-policies.md), or the roles were
+built by hand — then the field must match that literal namespace exactly.
+
+> **Do not read the task role's `system:serviceaccount:*:union` as the namespace.** The
+> trailing `union` there is a **service account** name. That it happens to match the default
+> namespace value is coincidence, and mistaking one for the other leads people to "fix"
+> working trust policies.
 
 Check the two ARNs before they are submitted — swapping system for task produces a data
 plane that installs and then fails at runtime in ways that do not point back here:
@@ -176,6 +216,41 @@ helm upgrade --install dp-agent oci://ghcr.io/omnistrate/dataplane-agent-chart \
 > **This outline is not runnable.** It is here so you can recognise what the real command
 > does and spot a truncated paste. The chart version and the entire values block come from
 > the UI. Never reconstruct it by hand.
+
+### Sanity-check the values without reading the secret
+
+If the human already wrote `values.yaml` themselves and asks you to run the Helm command,
+check three things first — all without printing the file:
+
+```bash
+# 🟢 READ-ONLY — never `cat values.yaml`
+kubectl config current-context                       # MUST be the cluster you just registered
+grep -E '^(cloudProvider|cloudRegion|replicas):' values.yaml
+grep -ciE 'BEGIN (RSA |EC )?PRIVATE KEY|BEGIN CERTIFICATE' values.yaml   # expect >= 2
+stat -f '%Sp %N' values.yaml 2>/dev/null || stat -c '%A %n' values.yaml
+```
+
+**Context first, always.** A kubeconfig that still has an *earlier* cluster's context current
+is the single most damaging mistake available at this point — it installs the agent into the
+wrong cluster and registers it against the wrong pool.
+
+**`cloudProvider: byoc-onprem` and `cloudRegion: on-prem` are correct on an AWS cluster.**
+This looks alarming — it reads as though the wrong provider was picked in the UI — but the
+chart is only the outbound tunnel, and agent-connected clusters are modelled as on-prem BYOC
+regardless of the underlying cloud. Corroborate it with `serviceAccount.annotations: {}`:
+the agent gets no IRSA annotation because it needs no AWS access at all. Your AWS specifics
+live in the cluster *pool* config from §1, not in this file. Do not "fix" this and do not
+re-register the cluster over it.
+
+**Fix the permissions before running.** The generated file lands world-readable while
+holding a private key:
+
+```bash
+chmod 600 values.yaml
+```
+
+Keep it out of version control. If the working directory is (or becomes) a git repo, it
+belongs in `.gitignore` next to `.union-selfserve.env`.
 
 ### The credential
 
@@ -281,11 +356,27 @@ kubectl get ns -o name | grep '^namespace/instance-' || echo "(data plane namesp
 kubectl get nodes    # Auto Mode nodes should start appearing now that there are pods
 ```
 
-Poll at roughly 30-second intervals, and give the human a one-line status each time rather
-than dumping full pod tables. Done when the panel reads **Complete** and the badge next to
-the cluster's name on its own page turns green and reads **Healthy** — that badge is the one
-that was showing **Unhealthy** all through the install, so tell the human to watch it there
-rather than going back to the cluster list.
+**The agent pod sitting `Pending` with `kubectl get nodes` empty is the expected first
+state, not a failure.** On a fresh Auto Mode cluster the agent is the first workload, so
+there are no nodes until EKS provisions one for it — typically 60–120 seconds, after which
+the pod schedules on its own. Say this *before* the human sees `Pending` and concludes
+something broke. This is also where EC2 charges genuinely begin; the control plane has been
+billing since it was created.
+
+Rather than hand-polling each turn, block on the data plane namespace appearing:
+
+```bash
+# backgrounded — returns when Union.ai has created the data plane namespace
+until kubectl get ns -o name 2>/dev/null | grep -q '^namespace/instance-'; do sleep 20; done
+echo "DATA PLANE NAMESPACE CREATED"
+kubectl get ns -o name | grep '^namespace/instance-'
+```
+
+Poll at roughly 30-second intervals if you must do it by hand, and give the human a one-line
+status each time rather than dumping full pod tables. Done when the panel reads **Complete**
+and the badge next to the cluster's name on its own page turns green and reads **Healthy** —
+that badge is the one that was showing **Unhealthy** all through the install, so tell the
+human to watch it there rather than going back to the cluster list.
 
 Still not Complete after ~15 minutes, or pods in `CrashLoopBackOff`, `ImagePullBackOff` or
 `Pending` → **`union-debug-cluster`**.

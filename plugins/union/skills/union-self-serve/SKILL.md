@@ -78,6 +78,29 @@ The file is append-only and the last definition of a name wins, so re-running a 
 safe. `.union-selfserve.env` is in this repo's `.gitignore`; if you create it somewhere
 else, make sure it is ignored — it holds account IDs and role ARNs.
 
+**Put `AWS_PROFILE` in it.** The same "fresh shell every command" problem that loses
+`CLUSTER_NAME` also loses the AWS account: a profile the human exported earlier, or logged
+into interactively, is gone by the next command, which then silently falls back to the
+default profile. When the default is a shared or production account, that is how an EKS
+cluster gets created next to production. Record it at the top of the file so every `source`
+re-pins it:
+
+```bash
+echo "export AWS_PROFILE=<deployment-profile>" >> "$UNION_ENV_FILE"
+```
+
+Then confirm, every time it matters, that the account is the one you think:
+
+```bash
+source "$UNION_ENV_FILE"
+aws sts get-caller-identity --query '[Account,Arn]' --output text
+```
+
+**One state file per generation.** If a previous attempt under a different `NAME_PREFIX` is
+still around — being torn down, say — do not mix its names into the live file. Give the old
+one its own file via `UNION_ENV_FILE=/some/other/path`, so a stale `CLUSTER_NAME` can never
+be sourced into a command that deletes things.
+
 **Guard every step.** Before doing anything that depends on prior state:
 
 ```bash
@@ -120,6 +143,41 @@ knows a turn is theirs:
 - **🔐 SECRET — DO NOT PRINT** — must not be echoed into the transcript, a file that gets
   committed, a ticket, or a chat message. The agent Helm values block in step 5 is one of
   these: it contains a client certificate and private key.
+
+### 4. Status discipline — because provisioning is mostly waiting
+
+Three things in this flow take minutes, not seconds: the EKS cluster (**15–20 min**), the
+Auto Mode node for the first pod (**1–2 min**), and Union.ai installing the data plane
+(**a few min**). Most confusion in a setup session comes from the human not knowing which
+of those is in flight, whether it is stuck, or whose turn it is.
+
+**Block, don't hand-poll.** Start one backgrounded waiter on the actual condition and pick
+the work up when it returns. Do not re-check every turn, and do not chain `sleep` calls —
+some harnesses block a bare `sleep` specifically to push you toward this:
+
+```bash
+until "<condition>"; do sleep 20; done; echo "READY"
+```
+
+**Keep a standing status table** whenever something is in flight. Three states, and never
+drop the third:
+
+| | |
+|---|---|
+| ✅ **Done** | with the concrete result — a name, an ARN, a status |
+| ⏳ **In flight** | what it is and roughly how long it takes |
+| ⏸ **Blocked on you** | the exact browser action needed, restated in full |
+
+**Re-state blocked items every turn until they clear.** A hand-off mentioned once, ten
+messages ago, has effectively not been made — and an item parked in the UI (a cluster still
+registered, an old stack still billing) is invisible from the CLI. If the human changes
+direction mid-flow, say plainly what that leaves outstanding rather than silently dropping
+it.
+
+**Say what is not yet real.** When a value is predictable before the resource exists — the
+IRSA role ARNs are the standard case — give the value, then say in the same breath that the
+resource does not exist yet and what has to happen first. Never let a correct-looking string
+imply a working resource.
 
 ---
 

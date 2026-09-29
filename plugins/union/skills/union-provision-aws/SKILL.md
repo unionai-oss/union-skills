@@ -102,7 +102,14 @@ echo "--- identity ---"
 aws sts get-caller-identity
 echo "--- region ---"
 aws configure get region || echo "(no default region configured)"
+echo "--- profiles ---"
+aws configure list-profiles 2>/dev/null | head -40
 ```
+
+An expired SSO token shows up here as
+`Error when retrieving token from sso: Token has expired and refresh failed`. The agent
+cannot fix that — logging in is interactive. Ask the human to run `aws sso login`
+themselves (in Claude Code, `! aws sso login` runs it in-session), then re-run the check.
 
 Required:
 
@@ -121,6 +128,53 @@ Required:
 documents; the commands below use a plain unquoted heredoc instead, which does the same
 substitution with nothing to install. This matters because `envsubst` ships with GNU gettext
 and is absent from a stock macOS.
+
+### Pin the account with `AWS_PROFILE`, not with whatever is default
+
+Many people's default profile points at a **shared** account that also holds production.
+Every agent command runs in a fresh shell, so "I switched profiles earlier" does not
+survive — the next command silently falls back to the default account and creates an EKS
+cluster next to production.
+
+So: decide the deployment profile now, and record it **in the state file** (step 1) so every
+`source` re-pins it. Never carry it as a bare `--profile` flag you have to remember.
+
+```bash
+# 🟢 READ-ONLY — confirm the profile maps to the account you expect
+AWS_PROFILE=<deployment-profile> aws sts get-caller-identity --query '[Account,Arn]' --output text
+```
+
+> **zsh gotcha, worth knowing before it bites.** Do *not* stash the flag in a variable and
+> rely on word-splitting — `P="--profile foo"; aws $P eks list-clusters` works in bash but
+> **fails in zsh**, which does not word-split unquoted expansions by default, so the whole
+> string arrives as one argument: `Found invalid choice '--profile foo'`. Export
+> `AWS_PROFILE` instead; it needs no splitting and `eksctl`, `kubectl` and `helm` all honour
+> it too.
+
+### Sweep for earlier generations before you spend anything
+
+🟢 READ-ONLY. People arrive at this skill having already half-built a stack under a previous
+name — and an abandoned EKS cluster bills ~$73/month plus nodes and NAT gateways
+indefinitely. Find it **before** adding a second one.
+
+```bash
+aws eks list-clusters --region "${AWS_REGION:-us-east-2}" --output text
+aws s3api list-buckets --query 'Buckets[].Name' --output text | tr '\t' '\n' | grep -i union
+aws ecr describe-repositories --region "${AWS_REGION:-us-east-2}" \
+  --query 'repositories[].repositoryName' --output text 2>/dev/null
+aws iam list-roles --query 'Roles[?contains(RoleName, `union`)].RoleName' --output text
+```
+
+If something from an earlier attempt turns up, **say what it costs and ask** before
+provisioning alongside it. A cluster that is `ACTIVE` with running nodes and a
+`dataplane-agent` namespace is a *connected* cluster: it may still be registered in
+Union.ai, and [references/teardown.md](references/teardown.md) has to start in the UI, not
+in the CLI.
+
+```bash
+# 🟢 READ-ONLY — is that old cluster still connected?
+kubectl --context "<old-context>" get ns 2>/dev/null | grep -E 'dataplane-agent|instance-'
+```
 
 ---
 
@@ -143,6 +197,10 @@ UNION_ENV_FILE="${UNION_ENV_FILE:-$PWD/.union-selfserve.env}"
 touch "$UNION_ENV_FILE" && chmod 600 "$UNION_ENV_FILE"
 
 cat >> "$UNION_ENV_FILE" <<'EOF'
+# Pins every later command to the deployment account. Without this, a fresh shell
+# falls back to the default profile — which is often a shared or production account.
+# Omit the line only if the default profile IS the deployment account.
+export AWS_PROFILE=<deployment-profile>
 export AWS_REGION=us-east-2
 export NAME_PREFIX=<my-team>
 export KUBERNETES_VERSION=1.34
@@ -178,10 +236,15 @@ before relying on either value:
 
 ```bash
 # 🟢 READ-ONLY
-aws eks describe-cluster-versions --region "$AWS_REGION" \
-  --query 'clusterVersions[?clusterVersionStatus==`standard-support`].clusterVersion' \
-  --output text 2>/dev/null || echo "(older AWS CLI: check the EKS console for supported versions)"
+aws eks describe-cluster-versions --region "$AWS_REGION" --output json 2>/dev/null \
+  | jq -r '.clusterVersions[]? | "\(.clusterVersion)\t\(.clusterVersionStatus)"' \
+  || echo "(older AWS CLI: check the EKS console for supported versions)"
 ```
+
+The filtered `--query 'clusterVersions[?clusterVersionStatus==\`standard-support\`]'` form
+prints **nothing at all** on some CLI versions, because `clusterVersionStatus` comes back
+`null` — which reads exactly like "no versions available" and sends you chasing a
+non-problem. List every version with its status and decide by eye.
 
 If `KUBERNETES_VERSION` is not in that list, append a corrected `export KUBERNETES_VERSION=`
 line to the state file rather than editing in place — last definition wins.
@@ -199,6 +262,50 @@ aws iam get-role --role-name "$TASK_ROLE_NAME" --query 'Role.Arn' --output text 
 
 A bucket that exists but is owned by another AWS account returns `403 Forbidden`, not
 `404` — that name is taken globally and must be changed.
+
+---
+
+## Run the steps in this order, not in numbered order
+
+The numbering follows the docs. The *useful* order is different, and it matters because the
+EKS build is 15–20 minutes of dead time the human otherwise spends staring at a spinner.
+
+**The cluster pool form needs only four values — S3 bucket, account ID, Region, image
+registry — and not one of them depends on the EKS cluster.** So build the cheap resources
+first, hand the human their four values, and let them fill in the UI *while* the cluster
+builds:
+
+| Order | Step | Why here |
+|---|---|---|
+| 1 | **Step 3** — S3 bucket + CORS | Seconds. Costs ~nothing empty. |
+| 2 | **Step 4** — ECR repository | Seconds. Costs ~nothing empty. |
+| 3 | 📤 **TO THE UI** — the four pool values | Human starts the UI form now, not in 20 minutes. |
+| 4 | **Step 2** — EKS cluster, **backgrounded** | The long pole. Runs while they click. |
+| 5 | **Step 2a/2b** — OIDC, kubeconfig | Needs the cluster. |
+| 6 | **Steps 5–7** — roles, policies, ECR policy | Needs the OIDC issuer. |
+| 7 | 📤 **TO THE UI** — the two role ARNs | Human finishes the *Connect cluster* dialog. |
+
+Tell the human this shape up front. "Two of your four values are ready now, the other two
+in about twenty minutes" sets a very different expectation from silence.
+
+### The role ARNs are predictable — the roles are not
+
+The human will ask for the two role ARNs early, often repeatedly, because the UI asks for
+them. Their **values** are fully determined by step 1:
+
+```
+arn:aws:iam::${AWS_ACCOUNT_ID}:role/${CLUSTER_NAME}-system
+arn:aws:iam::${AWS_ACCOUNT_ID}:role/${CLUSTER_NAME}-task
+```
+
+Give them those strings when asked, **with an explicit warning that the roles do not exist
+yet**, and say why rather than appearing to stall: the whole substance of an IRSA role is a
+trust policy naming the cluster's OIDC issuer, and that issuer ID is minted with the
+cluster. Creating the roles early would mean either a placeholder trust policy nothing can
+assume, or a malformed federated principal that **IAM accepts without complaint** and that
+never works — surfacing much later as pods that cannot reach S3.
+
+If the UI validates the ARN on submit, it will reject them until step 5 runs. Say so.
 
 ---
 
@@ -237,8 +344,42 @@ Two parts of that config are load-bearing:
   same cluster-scoped resources. Auto Mode supplies networking and DNS, so the default
   add-ons are not missed. Do not "fix" this later by adding the EKS Metrics Server add-on.
 
-Set the command's timeout to at least 25 minutes, or run it in the background and poll —
-20 minutes of silence is normal, not a hang. If it fails partway, **do not blind-retry**:
+**Run it backgrounded.** It routinely outruns a foreground tool timeout, and backgrounding
+frees the human to fill in the cluster pool form meanwhile. 20 minutes of silence is normal,
+not a hang.
+
+### Block until the cluster is ready, instead of polling by hand
+
+Do **not** hand-poll `describe-cluster` every turn, and do not chain `sleep` calls — some
+agent harnesses refuse a bare `sleep` precisely to push you here. Start one backgrounded
+waiter that returns the moment the cluster flips to `ACTIVE`, and pick the work back up when
+it fires:
+
+```bash
+# backgrounded — returns only when ACTIVE, then prints everything step 2a needs
+source "${UNION_ENV_FILE:-$PWD/.union-selfserve.env}"
+until [ "$(aws eks describe-cluster --region "$AWS_REGION" --name "$CLUSTER_NAME" \
+           --query 'cluster.status' --output text 2>/dev/null)" = "ACTIVE" ]; do sleep 20; done
+echo "CLUSTER ACTIVE"
+aws eks describe-cluster --region "$AWS_REGION" --name "$CLUSTER_NAME" \
+  --query 'cluster.{status:status,version:version,autoMode:computeConfig.enabled,oidc:identity.oidc.issuer,nodeRole:computeConfig.nodeRoleArn}' \
+  --output json
+```
+
+Two practical notes:
+
+- **Pipe the `eksctl` build through `tail` and you lose interim progress** — the pipe buffers
+  until exit. That is fine, but it means the build log tells you nothing mid-flight; read
+  progress from CloudFormation instead:
+  `aws cloudformation describe-stacks --region "$AWS_REGION" --query "Stacks[?starts_with(StackName, 'eksctl-${CLUSTER_NAME}')].[StackName,StackStatus]" --output text`
+- **The stack takes a minute or two to appear at all.** An empty result right after launch is
+  `eksctl` preflight, not a failure. Auto Mode means there is no second nodegroup stack to
+  wait on afterwards — when the cluster stack completes, the cluster is ready.
+
+While it builds, keep the human oriented: what is already done, what is in flight, what is
+still blocked on them. A status table beats a progress bar here.
+
+If it fails partway, **do not blind-retry**:
 `eksctl` leaves CloudFormation stacks behind. Inspect and delete first:
 
 ```bash
@@ -575,11 +716,19 @@ EOF
 
 ```bash
 source "${UNION_ENV_FILE:-$PWD/.union-selfserve.env}"
-for r in "$SYSTEM_ROLE_NAME:union-system-access" "$TASK_ROLE_NAME:union-task-access"; do
-  aws iam get-role-policy --role-name "${r%%:*}" --policy-name "${r##*:}" \
-    --query 'PolicyDocument.Statement[?Sid==`UnionDataBuckets`].Resource' --output text
-done
+aws iam get-role-policy --role-name "$SYSTEM_ROLE_NAME" --policy-name union-system-access \
+  --query 'PolicyDocument.Statement[?Sid==`UnionDataBuckets`].Resource' --output text
+aws iam get-role-policy --role-name "$TASK_ROLE_NAME" --policy-name union-task-access \
+  --query 'PolicyDocument.Statement[?Sid==`UnionDataBuckets`].Resource' --output text
 ```
+
+> **Do not "tidy" that into a loop over `"$ROLE:union-system-access"` pairs split with
+> `${r%%:*}` / `${r##*:}`.** In **zsh** — the default shell on macOS, and the one an agent's
+> `Bash` tool usually gets — that collides with zsh's `:u` modifier: the role name comes back
+> uppercased with a character eaten
+> (`NIELS-TESTING-03-...-SYSTEMnion-system-access`) and the check dies with `NoSuchEntity`.
+> The policies attached correctly; only the verification is broken, which makes it an
+> especially confusing failure to read. Two explicit calls cost nothing.
 
 `ecr:GetAuthorizationToken` cannot be scoped to a repository — AWS only accepts `"*"` for
 it. The repository policy in step 7 is what actually limits which repository the token is
@@ -664,11 +813,28 @@ printf '%s\n' \
   "kubeconfig: aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}"
 ```
 
+### How to hand these over
+
+The human is going to alt-tab between a terminal and a browser form. Make that as close to
+mechanical as possible:
+
+- **Print one field per line, labelled exactly as the form labels it.** Not prose, not a
+  paragraph they have to mine for a value.
+- **Give the two forms as two separate blocks**, in the order the UI asks for them — the four
+  pool values, then the two role ARNs. Do not interleave them.
+- **Hand over the pool values as soon as steps 3 and 4 finish**, without waiting for the
+  cluster. See [the ordering section](#run-the-steps-in-this-order-not-in-numbered-order).
+- **Say which values are live and which are not yet.** If the roles do not exist yet, mark
+  them and say when they will.
+- **Never bury a value in command output.** Re-print it in a clean block even if it scrolled
+  past two commands ago; re-printing costs nothing and hunting causes mis-pastes.
+
 Two details that cause silent mistakes:
 
 - **The S3 value carries the `s3://` scheme.** The form wants `s3://my-bucket`, not
   `my-bucket`.
-- **The image registry is the full repository URI**, including `/<repository-name>`.
+- **The image registry is the full repository URI**, including `/<repository-name>`. The
+  registry *host* alone is the commonest wrong answer.
 
 Keep the state file, and keep `kubectl` pointed at this cluster: `union-connect-cluster`
 installs the agent from the same machine.
