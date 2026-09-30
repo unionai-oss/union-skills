@@ -128,19 +128,43 @@ Two things that look like problems and are not:
 📤 **TO THE UI.** When the pool is created, the dialog moves straight to **Connect a
 cluster** with the new pool selected.
 
+### Ask for the cluster name — do not derive it
+
+**Stop and ask the human what to call this cluster in Union.ai. Wait for an answer.** This
+is the one value in §2 that is theirs to decide: it is how they will recognise the cluster
+in the console, and it **cannot be changed once connected** — changing it later means
+disconnect and re-register.
+
+`CLUSTER_NAME` from the state file is the *EKS* cluster's name. It is a good **suggestion**,
+because keeping the two the same stops them drifting apart — so offer it, in the question:
+
+> "What should this cluster be called in Union.ai? Your EKS cluster is
+> `my-team-union-selfserve` — reusing that name keeps the two aligned, but it is
+> your call."
+
+Then record what they actually said, and only then print the form:
+
 ```bash
 source "${UNION_ENV_FILE:-$PWD/.union-selfserve.env}"
+echo "export UNION_CLUSTER_NAME=<the name the human gave you>" >> "$UNION_ENV_FILE"
+```
+
+```bash
+source "${UNION_ENV_FILE:-$PWD/.union-selfserve.env}"
+: "${UNION_CLUSTER_NAME:?ask the human what to call the cluster in Union.ai first — do not fall back to CLUSTER_NAME}"
 printf '%s\n' \
   "Connect a cluster:" \
-  "  Name                 <choose — see below>" \
+  "  Name                 ${UNION_CLUSTER_NAME}" \
   "  Namespace            union" \
   "  System IAM Role ARN  ${SYSTEM_IAM_ROLE_ARN}" \
   "  Task IAM Role ARN    ${TASK_IAM_ROLE_ARN}"
 ```
 
-**Ask the human for the name before they type it.** It identifies the cluster in Union.ai
-and **cannot be changed once connected**. Suggest the EKS cluster's own name so the two
-never drift apart, and do not pick one for them.
+The guard is the point. **Do not interpolate `${CLUSTER_NAME}` into the `Name` line**, and do
+not print the block with the name already filled in from the state file — a value that
+arrives pre-filled reads as settled, so the human confirms it without registering that they
+were choosing something permanent. The separate variable exists so the command cannot run
+until they have answered.
 
 ### The Namespace field
 
