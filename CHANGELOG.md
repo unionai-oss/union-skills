@@ -8,6 +8,18 @@ automated reads this file: `publish.yml` builds the GitHub release notes from
 commits with `--generate-notes`. So this is the only place a reader can see what
 changed between versions — write these entries for them.
 
+## [v0.0.5] - 2026-09-30
+
+### Changed
+
+- `union-connect-cluster` now makes the agent stop and ask what to call the
+  cluster in Union.ai, instead of filling the **Name** field in from the EKS
+  cluster's name. The name is permanent — changing it means disconnect and
+  re-register — so it is the human's call. The skill already said to ask; the
+  ask is now enforced by the command itself, which guards on a separate
+  `UNION_CLUSTER_NAME` and refuses to run on a derived value. The EKS name is
+  still offered, as a suggestion inside the question.
+
 ## [v0.0.4] - 2026-09-29
 
 What a real self-serve setup, driven end to end, turned up. Two documented
