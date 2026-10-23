@@ -2,9 +2,12 @@
 
 Agent skills for deploying, maintaining, and developing on [Union.ai](https://www.union.ai).
 
-The first release covers [self-serve setup](https://www.union.ai/docs/v2/union/deployment/self-serve/)
-on AWS, end to end: provision the infrastructure, connect a cluster, run workflows, and
-debug a data plane that will not come up.
+The [self-serve setup](https://www.union.ai/docs/v2/union/deployment/marketplace/) skills on
+AWS run end to end: provision the infrastructure, connect a cluster, run workflows, and
+debug a data plane that will not come up. A separate authoring skill,
+[`union-sdk-plugin`](plugins/union/skills/union-sdk-plugin/SKILL.md), covers Union's SDK
+extensions (`flyteplugins.union`): Volumes, factories, run forking and ssh-into-task
+debug, and the remote control-plane objects.
 
 ```bash
 uvx union-skills install        # copy the skills into whichever harness you use
@@ -47,6 +50,7 @@ around that — clipboard straight to a file, contents never rendered — and sa
 | [`union-provision-aws`](plugins/union/skills/union-provision-aws/SKILL.md) | Create the EKS cluster (Auto Mode), S3 bucket, private ECR repository and the two IRSA roles, then print the six values the UI asks for. Every step gated and idempotent. |
 | [`union-connect-cluster`](plugins/union/skills/union-connect-cluster/SKILL.md) | Create the cluster pool, register the cluster, install the `dp-agent` Helm release, and wait while Union.ai installs the data plane through it. |
 | [`union-debug-cluster`](plugins/union/skills/union-debug-cluster/SKILL.md) | Diagnose a cluster that is unhealthy or stuck: agent not connecting, data plane never arriving, IRSA trust mismatches, S3/ECR denials, Auto Mode not scheduling, Metrics Server collisions, missing bucket CORS. Ships a read-only snapshot script. |
+| [`union-sdk-plugin`](plugins/union/skills/union-sdk-plugin/SKILL.md) | Author workflows with the Union SDK plugin, `flyteplugins.union`: persistent mountable Volumes, artifact factories, run forking and ssh-into-task debug, and remote control-plane objects (API keys, clusters, queues, metrics, system logs). |
 
 Reference pages that skills link to at runtime:
 
