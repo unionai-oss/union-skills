@@ -13,12 +13,16 @@ cluster — Union.ai then installs the data plane into it for you.
 **Nothing dials in.** You install an agent into your cluster and it connects *outwards* to
 Union.ai. No port is opened, no endpoint exposed, no cluster credential handed over.
 
-Docs: <https://www.union.ai/docs/v2/union/deployment/self-serve/>
+Docs: <https://www.union.ai/docs/v2/union/deployment/marketplace/>
 
-> Self-serve setup is AWS-only today. GCP and Azure are "coming soon" — if the user is on
-> either, say so and point them at the manual
-> [self-managed guide](https://www.union.ai/docs/v2/union/deployment/selfmanaged.md)
-> instead of improvising.
+> Self-serve deployment (the UI-driven path) runs on **AWS, GCP and Azure**. The bundled
+> skills automate the **AWS** path end to end — `union-provision-aws` is AWS-only. On
+> **GCP or Azure** there is no Marketplace listing yet: the user contacts Union.ai for a
+> subscription, then provisions cloud resources from the docs
+> ([GCP](https://www.union.ai/docs/v2/union/deployment/marketplace/gcp-infrastructure.md),
+> [Azure](https://www.union.ai/docs/v2/union/deployment/marketplace/azure-infrastructure.md))
+> and connects the cluster. Point them at those pages; do not improvise the
+> IAM/workload-identity plumbing. AWS is the only self-serve path these skills automate.
 
 ---
 
@@ -44,6 +48,22 @@ prove the organization works before spending money on AWS.
 - *"I just want it running on my cluster"* → step 4, or step 5 if the AWS resources exist.
 - *"I connected it and it says Unhealthy"* → `union-debug-cluster`. Note that **Unhealthy is
   expected for the first few minutes** after the agent connects; see that skill first.
+
+Before routing into the steps, settle which **deployment model** the user actually wants —
+not everyone who says "deploy Union.ai" means self-serve AWS:
+
+- **All on AWS / GCP / Azure, and they are happy to provision and own the cluster** → this
+  flow (self-serve). These skills automate the AWS leg specifically.
+- **They want Union.ai to run the data plane for them, in their cloud account** → that is
+  **[BYOC](https://www.union.ai/docs/v2/union/deployment/byoc.md)**, a different shape: they
+  grant Union permission to provision compute, they do not own the cluster or its upgrades.
+  Not what these skills do — route to the BYOC docs.
+- **Not on AWS/GCP/Azure, or they want to install the data plane themselves on an existing
+  cluster** (OCI, neocloud, on-prem, or a manual Helm install) → the
+  [manual self-managed guide](https://www.union.ai/docs/v2/union/deployment/selfmanaged.md).
+  Also not what these skills do.
+- **They want the whole deployment as infrastructure-as-code** → the
+  [Union Terraform provider](https://www.union.ai/docs/v2/union/deployment/terraform.md).
 
 ---
 

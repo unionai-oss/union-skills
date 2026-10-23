@@ -11,7 +11,7 @@ the organization, the endpoint and the login all work — so run it *before*
 `union-provision-aws`, and a later failure is then unambiguously about the cluster rather
 than about the account.
 
-Docs: <https://www.union.ai/docs/v2/union/deployment/self-serve/run-locally/>
+Docs: <https://www.union.ai/docs/v2/union/deployment/marketplace/run-locally.md>
 
 ## What you need first
 

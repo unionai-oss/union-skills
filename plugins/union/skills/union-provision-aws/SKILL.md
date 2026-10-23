@@ -18,7 +18,7 @@ on must exist first. This skill creates them:
 
 The output is six values you type into two Union.ai forms in `union-connect-cluster`.
 
-Docs: <https://www.union.ai/docs/v2/union/deployment/self-serve/aws-infrastructure/>
+Docs: <https://www.union.ai/docs/v2/union/deployment/marketplace/aws-infrastructure.md>
 
 > **This is the self-serve shape, not the manual self-managed one.** Runtime secrets live in
 > AWS Secrets Manager, IAM trust follows the namespace the agent picks, and the data plane

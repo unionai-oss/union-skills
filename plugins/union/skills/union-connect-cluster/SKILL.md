@@ -13,7 +13,7 @@ agent you put in the cluster. Your code, data and credentials never leave your A
 over. The `dp-agent` Helm release connects *out* to Union.ai and the data plane arrives
 through that connection.
 
-Docs: <https://www.union.ai/docs/v2/union/deployment/self-serve/connect-a-cluster/>
+Docs: <https://www.union.ai/docs/v2/union/deployment/marketplace/connect-a-cluster.md>
 
 ## The shape of this step
 
