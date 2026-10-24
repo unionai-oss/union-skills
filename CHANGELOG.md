@@ -8,6 +8,36 @@ automated reads this file: `publish.yml` builds the GitHub release notes from
 commits with `--generate-notes`. So this is the only place a reader can see what
 changed between versions — write these entries for them.
 
+## [v0.1.0] - 2026-10-23
+
+A minor release — the first skill that is not part of the AWS self-serve flow.
+
+### Added
+
+- New `union-sdk-plugin` skill: authoring Union workflows with the proprietary
+  SDK plugin, `flyteplugins.union`. It covers the four plugin modules: run
+  forking and ssh-into-task debug (`debug`, `fork`, `with_debugcontext`,
+  `with_forkcontext`, `SSHDebug.connect`), persistent mountable Volumes
+  (`RWVolume`/`ROVolume`/`BlockVolume`, `allow_volumes`,
+  `with_high_throughput_volume_deps`), artifact factories
+  (`source`/`build`/`serve`/`materialize`/`on`), and the remote control-plane
+  objects (`ApiKey`, `Cluster`, `ClusterPool`, `Queue`, `Metrics`,
+  `SystemLogs`, `VolumeExplore`). Content follows the release-stable
+  `api-reference/union-plugin` docs, and run-launching and persistent-create
+  calls carry the approval-gate badge.
+
+### Changed
+
+- `union-self-serve` no longer claims self-serve is AWS-only. Per the stable
+  docs it runs on **AWS, GCP and Azure** (AWS is the path these skills automate),
+  so the routing now points GCP/Azure users at the corresponding infrastructure
+  pages. It also routes deployment-model choices — BYOC, manual self-managed,
+  and Terraform — that are not what these skills automate.
+- Doc links across `union-self-serve`, `union-run-locally`,
+  `union-connect-cluster` and `union-provision-aws` now point at the current
+  `/deployment/marketplace/` pages; the `/deployment/self-serve/` pages they
+  linked to are gone.
+
 ## [v0.0.5] - 2026-09-30
 
 ### Changed
